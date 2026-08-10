@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
-"""Standalone prototype: the row card from designs/app-panel, in real GTK4 widgets.
+"""Standalone prototype of the card row. Mock data, no wiring to the manager.
 
-Nothing here touches the app. Mock data only. Geometry copied from
-row-tunnels-dark.svg, whose 880x54 row places things at these x offsets:
+Layout rules, all of them learned by getting them wrong first:
 
-    3  stripe   26 led (centre)   42 title/subtitle   318 pill
-  424  port    516 target        716 state           824 switch    880 edge
+  * Every column is a fixed-width slot, and so is the window. Nothing expands, so no
+    row can sit a pixel off its neighbours -- which is the whole point, because the
+    row is read as a table.
+  * The slot owns the width, never the text. `set_size_request` is a MINIMUM: a slot
+    narrower than its content grows and pushes every column after it. That is what
+    put the PORT-FWD row 13 px right of the others, and no amount of staring at the
+    screenshot found it -- printing the real allocations did, in one run.
+  * Inside a slot, content is left-aligned and vertically centred. Always.
+  * The switch is pinned to the right edge.
+  * Every label ellipsises, so a long name or a long target can never move a column.
+
+Run it on your desktop:      python3 tools/row-proto.py
+Render it with no desktop:   gtk4-broadwayd :7 &
+                             GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 python3 tools/row-proto.py
 """
 
 from __future__ import annotations
@@ -17,102 +28,110 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, Gtk
+from gi.repository import Adw, Gdk, Gtk, Pango
 
-# --------------------------------------------------------------------------- geometry
-STRIPE = 3
-LED_MARGIN = 19  # 3 + 19 -> dot starts at 22, centre 25.5 (svg: 26)
+# ---------------------------------------------------------------------- geometry
+STRIPE = 3  # the state bar down the left edge
+LED_MARGIN = 19  # from the stripe to the dot
 LED = 7
-TITLE_GAP = 12  # dot ends at 29, + 12 -> 41 (svg: 42)
-TITLE_W = 276  # 42 -> 318
-PILL_W = 46  # 318 -> 364
-PORT_W = 152  # 364 -> 516, port text offset 60 -> 424
-PORT_OFFSET = 60
-TARGET_W = 200  # 516 -> 716
-STATE_W = 108  # 716 -> 824
-EDGE = 22  # 824 + 34 switch -> 880
+TITLE_GAP = 12  # from the dot to the name
+TITLE_W = 320  # column 1, the name and its subtitle
+PILL_W = 100  # column 2, fits "PORT-FWD", the longest word in the vocabulary
+PORT_W = 130  # column 3
+TARGET_W = 200  # column 4, the widest, and it ellipsises when a target is longer
+STATE_W = 108  # column 5
+SWITCH_W = 46  # column 6, the size Adwaita insists on
+EDGE = 22  # from the switch to the right edge
+ROW_MIN = 58
+PAGE_PAD = 18
+
+#: Every column is fixed, so the window is too: nothing can reflow and nothing can
+#: shift. 967 px of row.
+ROW_W = (
+    STRIPE
+    + LED_MARGIN
+    + LED
+    + TITLE_GAP
+    + TITLE_W
+    + PILL_W
+    + PORT_W
+    + TARGET_W
+    + STATE_W
+    + SWITCH_W
+    + EDGE
+)
+
+PALETTE = {
+    "up": "#2ec27e",  # Adwaita green 4
+    "busy": "#ffbe6f",  # Adwaita orange 1
+    "err": "#ed333b",  # Adwaita red 2, the value the design uses
+    "off": "#5e5c64",  # Adwaita dark 2
+}
 
 CSS = b"""
 window { background: #16161a; }
 
+/* The stripe is a sibling of the card, not a border on it: a border follows the
+   corner radius and comes out as a crescent. The design draws a straight bar and
+   lets it cover the card's left corners, so the card is only rounded on the right. */
 .card {
   background: #26262c;
   border: 1px solid alpha(#ffffff, 0.12);
-  border-radius: 10px;
-  min-height: 54px;
+  border-left: none;
+  border-radius: 0 10px 10px 0;
 }
-.card.up   { border-left: 3px solid #2ec27e; }
-.card.busy { border-left: 3px solid #ffbe6f; }
-.card.err  { border-left: 3px solid #ff7b63; }
-.card.off  { border-left: 3px solid #5e5c64; }
+/* Anything not established is dimmer as a whole, as in the design. */
+.card.busy, .card.err, .card.off { background: #212126; }
 
-/* The LED: a 7px dot with its halo painted as a spread-only shadow. */
-.led {
-  min-width: 7px;
-  min-height: 7px;
-  border-radius: 9999px;
-}
+.stripe      { min-width: 3px; border-radius: 0; }
+.stripe.up   { background: #2ec27e; }
+.stripe.busy { background: #ffbe6f; }
+.stripe.err  { background: #ed333b; }
+.stripe.off  { background: #5e5c64; }
+
+/* A 7px dot; its halo is a spread-only shadow. */
+.led { min-width: 7px; min-height: 7px; border-radius: 9999px; }
 .led.up   { background: #2ec27e; box-shadow: 0 0 0 4px alpha(#2ec27e, 0.22); }
 .led.busy { background: #ffbe6f; box-shadow: 0 0 0 4px alpha(#ffbe6f, 0.22); }
-.led.err  { background: #ff7b63; box-shadow: 0 0 0 4px alpha(#ff7b63, 0.22); }
+.led.err  { background: #ed333b; box-shadow: 0 0 0 4px alpha(#ed333b, 0.22); }
 .led.off  { background: #5e5c64; box-shadow: 0 0 0 4px alpha(#5e5c64, 0.18); }
 
-.row-title {
-  font-family: monospace;
-  font-weight: 700;
-  font-size: 12.5px;
-  color: #eceaee;
-}
-.row-sub { font-size: 10px; color: #94949f; }
+.row-title { font-family: monospace; font-weight: 700; font-size: 14px; color: #eceaee; }
+.row-sub   { font-size: 12px; color: #94949f; }
+.card.busy .row-title, .card.err .row-title, .card.off .row-title { color: #c9c9d1; }
+.card.busy .row-sub, .card.err .row-sub, .card.off .row-sub,
+.card.busy .target, .card.err .target, .card.off .target { color: #7c7c88; }
+.card.busy .port, .card.err .port, .card.off .port { color: #c9c9d1; }
 
 .pill {
   font-family: monospace;
   font-weight: 600;
-  font-size: 9px;
+  font-size: 10.5px;
   border-radius: 5px;
-  min-height: 18px;
-  padding: 0 6px;
+  min-height: 20px;
+  padding: 0 7px;
 }
-.pill.iap  { color: #62a0ea; background: alpha(#62a0ea, 0.15); }
-.pill.fwd  { color: #b0aeb5; background: alpha(#ffffff, 0.09); }
+.pill.iap { color: #62a0ea; background: alpha(#62a0ea, 0.15); }
+.pill.fwd { color: #b0aeb5; background: alpha(#ffffff, 0.09); }
 
-.port   { font-family: monospace; font-size: 11px; color: #eceaee; }
-.target { font-family: monospace; font-size: 11px; color: #94949f; }
+.port   { font-family: monospace; font-size: 13px; color: #eceaee; }
+.target { font-family: monospace; font-size: 13px; color: #94949f; }
 
-.state       { font-family: monospace; font-weight: 600; font-size: 10.5px; }
+.state      { font-family: monospace; font-weight: 600; font-size: 12px; }
 .state.up   { color: #2ec27e; }
 .state.busy { color: #ffbe6f; }
-.state.err  { color: #ff7b63; }
+.state.err  { color: #ed333b; }
 .state.off  { color: #94949f; }
-.substate    { font-family: monospace; font-size: 9px; color: #94949f; }
-.substate.link { color: #62a0ea; }
+.substate   { font-family: monospace; font-size: 10.5px; color: #94949f; }
 
-/* 34x18 with a 14px knob, the size the design draws. */
-switch {
-  min-width: 34px;
-  min-height: 18px;
-  border-radius: 9px;
-  background: #3a3a40;
-  border: none;
-  box-shadow: none;
-  padding: 0;
-}
+/* Adwaita paints the switch in the desktop's accent colour, which is whatever the
+   user picked -- orange here. The design specifies blue, so the row states it. */
+switch { background: #3a3a40; border: none; box-shadow: none; }
 switch:checked { background: #3584e4; }
-switch > slider {
-  min-width: 14px;
-  min-height: 14px;
-  margin: 2px;
-  border-radius: 9999px;
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-}
-/* GTK keeps two icons inside the switch for the on/off marks; at this size they
-   are the reason the widget refuses to shrink. */
-switch > image { -gtk-icon-size: 0; min-width: 0; min-height: 0; }
+switch > slider { background: #ffffff; border: none; box-shadow: none; }
 """
 
-# label, subtitle, kind, pill, port, target, state, substate, on
+# name, subtitle, state kind, pill, port, target, state word, second line, switch
 MOCK = [
     (
         "catalog-db-prod",
@@ -161,26 +180,46 @@ MOCK = [
 ]
 
 
-def cell(width: int, child: Gtk.Widget, offset: int = 0) -> Gtk.Box:
-    """A fixed-width slot, so a state change can never shift the row."""
-    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-    box.set_size_request(width, -1)
-    child.set_margin_start(offset)
-    box.append(child)
-    return box
-
-
-def label(text: str, *classes: str, xalign: float = 0.0) -> Gtk.Label:
-    widget = Gtk.Label(label=text, xalign=xalign, valign=Gtk.Align.CENTER)
+def label(text: str, *classes: str) -> Gtk.Label:
+    """Left-aligned, vertically centred, and it ellipsises rather than push a column."""
+    widget = Gtk.Label(
+        label=text,
+        xalign=0,
+        halign=Gtk.Align.START,
+        valign=Gtk.Align.CENTER,
+        ellipsize=Pango.EllipsizeMode.END,
+    )
     for name in classes:
         widget.add_css_class(name)
     return widget
 
 
-def build_row(label_text, sub, kind, pill, port, target, state, substate, on) -> Gtk.Widget:
-    card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+def slot(width: int, child: Gtk.Widget, offset: int = 0) -> Gtk.Box:
+    """A fixed-width column. The slot owns the width; the content sits left and centred."""
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, hexpand=False)
+    box.set_size_request(width, -1)
+    child.set_margin_start(offset)
+    child.set_halign(Gtk.Align.START)
+    child.set_valign(Gtk.Align.CENTER)
+    child.set_hexpand(True)
+    box.append(child)
+    return box
+
+
+def build_row(name, sub, kind, pill, port, target, state, substate, on) -> Gtk.Widget:
+    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+
+    stripe = Gtk.Box()
+    stripe.add_css_class("stripe")
+    stripe.add_css_class(kind)
+    stripe.set_size_request(STRIPE, -1)
+    row.append(stripe)
+
+    card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, hexpand=False)
     card.add_css_class("card")
     card.add_css_class(kind)
+    card.set_size_request(-1, ROW_MIN)
+    row.append(card)
 
     led = Gtk.Box(valign=Gtk.Align.CENTER)
     led.add_css_class("led")
@@ -189,39 +228,45 @@ def build_row(label_text, sub, kind, pill, port, target, state, substate, on) ->
     led.set_margin_start(LED_MARGIN)
     card.append(led)
 
+    # Nothing expands, not even this: with a fixed window, a fixed slot per column is
+    # the only layout where no row can ever sit a pixel off its neighbours.
     heading = Gtk.Box(
-        orientation=Gtk.Orientation.VERTICAL, spacing=1, valign=Gtk.Align.CENTER, hexpand=False
+        orientation=Gtk.Orientation.VERTICAL,
+        spacing=1,
+        valign=Gtk.Align.CENTER,
+        hexpand=False,
     )
     heading.set_size_request(TITLE_W, -1)
     heading.set_margin_start(TITLE_GAP)
-    heading.append(label(label_text, "row-title"))
+    heading.append(label(name, "row-title"))
     heading.append(label(sub, "row-sub"))
     card.append(heading)
 
-    chip = label(pill, "pill", "iap" if pill == "IAP" else "fwd", xalign=0.5)
-    chip.set_size_request(PILL_W, -1)
-    card.append(chip)
+    chip = label(pill, "pill", "iap" if pill == "IAP" else "fwd")
+    chip.set_ellipsize(Pango.EllipsizeMode.NONE)  # a closed vocabulary never truncates
+    card.append(slot(PILL_W, chip))
 
-    card.append(cell(PORT_W, label(port, "port"), PORT_OFFSET))
-    card.append(cell(TARGET_W, label(target, "target")))
+    card.append(slot(PORT_W, label(port, "port")))
+    card.append(slot(TARGET_W, label(target, "target")))
 
     stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1, valign=Gtk.Align.CENTER)
     stack.append(label(state, "state", kind))
     if substate:
-        classes = ("substate", "link") if "↗" in substate else ("substate",)
-        stack.append(label(substate, *classes))
-    card.append(cell(STATE_W, stack))
+        stack.append(label(substate, "substate"))
+    card.append(slot(STATE_W, stack))
 
-    switch = Gtk.Switch(active=on, valign=Gtk.Align.CENTER)
+    switch = Gtk.Switch(active=on, valign=Gtk.Align.CENTER, halign=Gtk.Align.END)
     switch.set_margin_end(EDGE)
+    switch.set_size_request(SWITCH_W, -1)
     card.append(switch)
-    return card
+    return row
 
 
 class Window(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Row prototype")
-        self.set_default_size(880 + 2 * 24, 340)
+        self.set_default_size(ROW_W + 2 * PAGE_PAD, 360)
+        self.set_resizable(False)
 
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         for setter in (
@@ -230,7 +275,7 @@ class Window(Adw.ApplicationWindow):
             page.set_margin_start,
             page.set_margin_end,
         ):
-            setter(24)
+            setter(PAGE_PAD)
         for mock in MOCK:
             page.append(build_row(*mock))
 
