@@ -55,18 +55,11 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-yaml
 
 Those packages are the *bindings and typelibs* that let Python talk to the GTK libraries
 already on your system — not GTK itself. They cannot come from `pip`: PyGObject publishes
-no binary wheels, and even compiled it would still need the native libraries. If you want a
-single self-contained file instead, see [issues](https://github.com/lucianobosco/tunnels-manager/issues)
-for the AppImage discussion.
+no binary wheels, and even compiled it would still need the native libraries.
 
-The installer only writes inside your `$HOME`:
-
-| What | Where |
-| --- | --- |
-| Launcher (symlink) | `~/.local/bin/tunnels-manager` |
-| Desktop entry | `~/.local/share/applications/io.github.lucianobosco.TunnelsManager.desktop` |
-| Icon | `~/.local/share/icons/hicolor/scalable/apps/io.github.lucianobosco.TunnelsManager.svg` |
-| Your configuration | `~/.config/tunnels-manager/tunnels.yaml` |
+No sudo, and nothing outside your `$HOME`: a launcher in `~/.local/bin`, a desktop entry
+and an icon in `~/.local/share`, and your configuration in
+`~/.config/tunnels-manager/tunnels.yaml`. To uninstall, delete those four things.
 
 Then search for **Tunnels Manager** in your launcher, or run `tunnels-manager`.
 
