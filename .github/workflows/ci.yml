@@ -12,7 +12,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # PyGObject comes from the distribution, not from PyPI.
       - name: Install GTK bindings
@@ -39,7 +39,7 @@ jobs:
   leaks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0  # gitleaks scans the whole history
       - uses: gitleaks/gitleaks-action@v2
