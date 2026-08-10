@@ -35,11 +35,13 @@ STRIPE = 3  # the state bar down the left edge
 LED_MARGIN = 19  # from the stripe to the dot
 LED = 7
 TITLE_GAP = 12  # from the dot to the name
-TITLE_W = 320  # column 1, the name and its subtitle
+TITLE_W = 280  # column 1, the name and its subtitle
 PILL_W = 100  # column 2, fits "PORT-FWD", the longest word in the vocabulary
-PORT_W = 130  # column 3
-TARGET_W = 200  # column 4, the widest, and it ellipsises when a target is longer
+PORT_W = 70  # column 3, a port is six digits and a colon; the slack went to the target
+TARGET_W = 334  # column 4, the widest: a bastion name plus its port needs every pixel
 STATE_W = 108  # column 5
+GUTTER = 14  # every column keeps this clear on its right, so an ellipsis never
+# ends up touching the next column
 SWITCH_W = 46  # column 6, the size Adwaita insists on
 EDGE = 22  # from the switch to the right edge
 ROW_MIN = 58
@@ -194,14 +196,29 @@ def label(text: str, *classes: str) -> Gtk.Label:
     return widget
 
 
-def slot(width: int, child: Gtk.Widget, offset: int = 0) -> Gtk.Box:
-    """A fixed-width column. The slot owns the width; the content sits left and centred."""
+def slot(width: int, child: Gtk.Widget, offset: int = 0, align: str = "start") -> Gtk.Box:
+    """A fixed-width column. The slot owns the width; the content is always centred
+    vertically, and sits left, centred or right within it.
+
+    A centred column keeps no gutter -- a margin on one side only would push it off
+    centre by half of itself.
+    """
     box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, hexpand=False)
     box.set_size_request(width, -1)
     child.set_margin_start(offset)
-    child.set_halign(Gtk.Align.START)
     child.set_valign(Gtk.Align.CENTER)
     child.set_hexpand(True)
+
+    if align == "center":
+        child.set_halign(Gtk.Align.CENTER)
+    elif align == "end":
+        child.set_margin_end(GUTTER)
+        child.set_halign(Gtk.Align.FILL)
+        if isinstance(child, Gtk.Label):
+            child.set_xalign(1)
+    else:
+        child.set_margin_end(GUTTER)
+        child.set_halign(Gtk.Align.START)
     box.append(child)
     return box
 
@@ -244,15 +261,17 @@ def build_row(name, sub, kind, pill, port, target, state, substate, on) -> Gtk.W
 
     chip = label(pill, "pill", "iap" if pill == "IAP" else "fwd")
     chip.set_ellipsize(Pango.EllipsizeMode.NONE)  # a closed vocabulary never truncates
-    card.append(slot(PILL_W, chip))
+    card.append(slot(PILL_W, chip, align="center"))
 
-    card.append(slot(PORT_W, label(port, "port")))
+    card.append(slot(PORT_W, label(port, "port"), align="end"))
     card.append(slot(TARGET_W, label(target, "target")))
 
     stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1, valign=Gtk.Align.CENTER)
     stack.append(label(state, "state", kind))
-    if substate:
-        stack.append(label(substate, "substate"))
+    # The second line always exists. A stopped tunnel has nothing to say there, but if
+    # the line only appeared when it did, the state word would jump the moment a tunnel
+    # started connecting. An em dash is the table convention for "no value".
+    stack.append(label(substate or "\u2014", "substate"))
     card.append(slot(STATE_W, stack))
 
     switch = Gtk.Switch(active=on, valign=Gtk.Align.CENTER, halign=Gtk.Align.END)
