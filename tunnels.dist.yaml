@@ -1,0 +1,77 @@
+# Example configuration for Tunnels Manager.
+#
+# On first run this file is copied to ~/.config/tunnels-manager/tunnels.yaml. Your real
+# configuration lives only there and is never versioned: replace the example tunnels with
+# your own. Press Ctrl+R in the app to reload the file.
+#
+# type: iap (the default) is equivalent to:
+#   gcloud compute start-iap-tunnel <instance> <remote_port> \
+#     --zone=<zone> --project=<project> --local-host-port=<local_host>:<local_port>
+# type: command runs 'command' as it is (kubectl port-forward, ssh -L, …) and watches
+#   'local_port' to know whether the tunnel is up.
+#
+# service: mysql | http | tcp — sets the row badge, decides which fields the connection
+#   panel offers, and groups the window (mysql -> "Databases", anything else -> "Services").
+# database: optional database name; goes into the JDBC string and the mysql command.
+# env: pro | pre | dev; guessed from the project name when omitted.
+# group: only to force a group other than the one implied by 'service'.
+# bundles: shortcuts that open several tunnels at once, by their 'key'.
+#   Manage them in the app: main menu -> Shortcuts -> Manage shortcuts…
+
+tunnels:
+  # An IAP tunnel to a production database.
+  - key: shop-pro
+    label: Shop (production)
+    instance: my-bastion
+    remote_port: 3306
+    zone: europe-west1-d
+    project: my-project-pro
+    local_host: 127.0.0.1
+    local_port: 3307
+    service: mysql
+    database: shop
+    env: pro
+
+  # The same bastion can expose several databases on different remote ports.
+  - key: reports-pro
+    label: Reports (production)
+    instance: my-bastion
+    remote_port: 3307
+    zone: europe-west1-d
+    project: my-project-pro
+    local_host: 127.0.0.1
+    local_port: 3308
+    service: mysql
+    database: reports
+    env: pro
+
+  # Staging. local_host: 0.0.0.0 exposes it to your whole network, which is handy for a
+  # VM or a container; those rows get a warning badge in the app.
+  - key: shop-pre
+    label: Shop (staging)
+    instance: my-staging-bastion
+    remote_port: 3306
+    zone: europe-west1-d
+    project: my-project-pre
+    local_host: 0.0.0.0
+    local_port: 3309
+    service: mysql
+    database: shop
+    env: pre
+
+  # Any command that opens a local port: here a Kubernetes port-forward.
+  - key: internal-dashboard
+    label: Internal dashboard
+    type: command
+    command: kubectl -n my-namespace port-forward svc/my-dashboard 8080:80
+    local_host: 127.0.0.1
+    local_port: 8080
+    target_label: svc/my-dashboard:80 (my-namespace)
+    service: http
+    env: pro
+
+# Shortcuts open several tunnels at once from the main menu.
+bundles:
+  Daily work:
+    - shop-pro
+    - reports-pro

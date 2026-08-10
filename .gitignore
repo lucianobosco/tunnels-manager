@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# The real configuration lives in ~/.config/tunnels-manager/tunnels.yaml, not here.
+tunnels.yaml
+
+# Your own list of names that must not be published: stays on your machine.
+.leakwords.local

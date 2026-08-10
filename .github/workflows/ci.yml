@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # PyGObject comes from the distribution, not from PyPI.
+      - name: Install GTK bindings
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0 python3-yaml
+
+      - name: Install the development tools
+        run: python3 -m pip install --break-system-packages ruff mypy pytest pytest-cov types-PyYAML
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Types
+        run: mypy tunnels_manager
+
+      # The GTK layer needs no display here: the suite never builds widgets.
+      - name: Tests with 100% coverage of the logic
+        run: python3 -m pytest --cov --cov-report=term-missing
+
+  leaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks scans the whole history
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

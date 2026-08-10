@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Refuse the commit when the staged changes carry credentials or internal names.
+# Enable it with:  git config core.hooksPath .githooks
+exec "$(git rev-parse --show-toplevel)/tools/check-leaks.sh" --staged

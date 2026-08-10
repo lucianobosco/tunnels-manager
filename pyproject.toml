@@ -1,0 +1,96 @@
+[project]
+name = "tunnels-manager"
+version = "1.0.0"
+description = "A small GTK4 manager for Google Cloud IAP tunnels and port-forwards"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Luciano Bosco" }]
+keywords = ["gcloud", "iap", "tunnel", "gtk", "gnome", "mysql", "kubernetes"]
+classifiers = [
+  "Environment :: X11 Applications :: GTK",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Networking",
+]
+# PyGObject comes from the distribution packages (python3-gi), not from PyPI.
+dependencies = ["PyYAML>=6.0"]
+
+[project.urls]
+Homepage = "https://github.com/lucianobosco/tunnels-manager"
+Issues = "https://github.com/lucianobosco/tunnels-manager/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "types-PyYAML"]
+
+[project.scripts]
+tunnels-manager = "tunnels_manager.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["tunnels_manager", "tunnels_manager.ui"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle
+  "F",    # pyflakes
+  "W",    # warnings
+  "I",    # import order
+  "UP",   # pyupgrade
+  "B",    # bugbear
+  "C4",   # comprehensions
+  "SIM",  # simplify
+  "RUF",  # ruff specific
+]
+ignore = [
+  # GTK requires gi.require_version() before importing, so those imports cannot be at
+  # the top of the file. Each one is marked with noqa: E402 anyway.
+  "E402",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests poke at internals and build long fixtures on purpose.
+"tests/*" = ["B011", "SIM117"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -m 'not gui'"
+markers = ["gui: needs a graphical session (DISPLAY or WAYLAND_DISPLAY)"]
+
+[tool.coverage.run]
+branch = true
+source = ["tunnels_manager"]
+# The GTK layer is covered by the opt-in `gui` suite, which is not part of the default
+# run because it opens real windows. `make test-gui` measures it.
+omit = ["tunnels_manager/ui/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 100
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+
+# PyGObject ships no type information, so anything under gi.* is untyped by nature.
+[[tool.mypy.overrides]]
+module = ["gi.*", "gi.repository.*"]
+ignore_missing_imports = true

@@ -1,0 +1,41 @@
+# gitleaks configuration for this repository.
+#
+# Only generic patterns live here: this file is public, so it must not contain the very
+# names we are trying to keep out of the repo (that would be the leak itself).
+#
+# Your organisation's names go in .leakwords.local, which is git-ignored and never
+# pushed. Copy .leakwords.local.example to create it.
+#
+#   tools/check-leaks.sh   # these rules plus your local list
+#   gitleaks dir .         # these rules only, on the working tree
+#   gitleaks git .         # the same, over the whole history
+
+title = "tunnels-manager"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "gcp-project-id"
+description = "A GCP project id that looks real (something-pro-rev1, something-pre-rev2…)"
+regex = '''[a-z0-9]+-[a-z0-9-]+-(pro|pre|prod|stg)-rev[0-9]+'''
+tags = ["infra", "gcp"]
+
+[[rules]]
+id = "kubernetes-context"
+description = "A kubectl context pointing at a specific cluster (project, region, cluster)"
+regex = '''gke_[a-z0-9-]+_[a-z0-9-]+_[a-z0-9-]+'''
+tags = ["infra", "kubernetes"]
+
+[[rules]]
+id = "bastion-instance-name"
+description = "A bastion instance name carrying environment and region, typical of real infra"
+regex = '''[a-z0-9]+-bastion-[a-z0-9-]*(pro|pre|prod|stg)-[a-z]{2}-[0-9]+'''
+tags = ["infra", "gcp"]
+
+[allowlist]
+description = "The example configuration uses made-up names on purpose"
+paths = [
+  '''^tunnels\.dist\.yaml$''',
+  '''^\.gitleaks\.toml$''',
+]
