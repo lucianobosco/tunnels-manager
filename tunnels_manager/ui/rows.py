@@ -382,7 +382,7 @@ class TunnelRow(Gtk.ListBoxRow):
             self.proxy_node.set_subtitle("gcloud iap")
         elif kind == presenter.KIND_UP and self.last_rtt is not None:
             # What the design writes here: the tunnel's state and the last figure.
-            self.proxy_node.set_subtitle(f"{word.lower()} · {self.last_rtt:.0f} ms")
+            self.proxy_node.set_subtitle(f"{word.lower()} · {presenter.format_rtt(self.last_rtt)}")
         else:
             self.proxy_node.set_subtitle(word.lower())
 
@@ -393,7 +393,7 @@ class TunnelRow(Gtk.ListBoxRow):
             # A server that greets nobody, or one that has stopped answering.
             self.rtt_label.set_text("rtt \u2014")
         else:
-            self.rtt_label.set_text(f"rtt {result:.0f} ms")
+            self.rtt_label.set_text(f"rtt {presenter.format_rtt(result)}")
             self.spark.push(result)
         self.sync_proxy_subtitle()
         return GLib.SOURCE_REMOVE

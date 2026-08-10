@@ -106,6 +106,17 @@ NUMPY_INSTALL = (
 )
 
 
+def format_rtt(milliseconds: float) -> str:
+    """A round trip, written so it cannot be mistaken for a broken reading.
+
+    Through a tunnel on this machine the answer often comes back in under a millisecond,
+    and "0 ms" reads like a failure rather than like the truth.
+    """
+    if milliseconds < 1:
+        return "<1 ms"
+    return f"{milliseconds:.0f} ms"
+
+
 def numpy_hint(tunnel: Tunnel) -> str:
     """The command that answers the warning gcloud writes into its own log."""
     if not any(NUMPY_NEEDLE in line for line in tunnel.log):
