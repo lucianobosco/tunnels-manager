@@ -18,10 +18,13 @@ python3 -c "import gi; gi.require_version('Gtk','4.0')" 2>/dev/null \
 python3 -c "import gi; gi.require_version('Adw','1')" 2>/dev/null || missing+=("gir1.2-adw-1")
 python3 -c "import yaml" 2>/dev/null || missing+=("python3-yaml")
 if [ ${#missing[@]} -gt 0 ]; then
-  echo "    Missing packages. On Debian or Ubuntu:"
+  # These are the Python bindings and typelibs for the GTK libraries your desktop already
+  # ships; they are not available as pip wheels.
+  echo "    Missing the GTK bindings. On Debian or Ubuntu:"
   echo "    sudo apt install ${missing[*]}"
   exit 1
 fi
+echo "    All good: nothing to install."
 command -v gcloud >/dev/null || echo "    Note: gcloud is not in PATH, so IAP tunnels will fail."
 
 echo "==> Installing the launcher in $BIN_DIR"

@@ -39,13 +39,25 @@ processes behind is the actual work. Tunnels Manager does that part:
 Requirements: Linux with GTK 4.12+, Python 3.11+, and `gcloud` if you use IAP tunnels.
 
 ```bash
-# Debian / Ubuntu
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-yaml
-
 git clone https://github.com/lucianobosco/tunnels-manager.git
 cd tunnels-manager
 ./install.sh
 ```
+
+`install.sh` checks its dependencies first and prints the exact command if something is
+missing. **On a GNOME desktop there is usually nothing to install**: GTK 4 and libadwaita
+are already there because the desktop itself uses them, and so are the Python bindings.
+If the check does complain, on Debian or Ubuntu it is:
+
+```bash
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-yaml
+```
+
+Those packages are the *bindings and typelibs* that let Python talk to the GTK libraries
+already on your system — not GTK itself. They cannot come from `pip`: PyGObject publishes
+no binary wheels, and even compiled it would still need the native libraries. If you want a
+single self-contained file instead, see [issues](https://github.com/lucianobosco/tunnels-manager/issues)
+for the AppImage discussion.
 
 The installer only writes inside your `$HOME`:
 
