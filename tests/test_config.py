@@ -7,7 +7,7 @@ import textwrap
 import yaml
 
 from tunnels_manager import config
-from tunnels_manager.model import SERVICE_HTTP, SERVICE_MYSQL, TYPE_COMMAND, Tunnel
+from tunnels_manager.model import TYPE_COMMAND, Tunnel
 
 
 def write_config(text: str) -> None:
@@ -84,13 +84,10 @@ def test_parse_tunnels_reads_every_field(written_config):
     assert [tunnel.key for tunnel in tunnels] == ["shop", "reports", "dashboard"]
 
     shop = tunnels[0]
-    assert shop.service == SERVICE_MYSQL
     assert shop.group == "Databases"
-    assert shop.database == "shop"
 
     dashboard = tunnels[2]
     assert dashboard.type == TYPE_COMMAND
-    assert dashboard.service == SERVICE_HTTP
     assert dashboard.group == "Services"
     assert dashboard.target_label == "svc/dash:80 (team)"
 
@@ -113,10 +110,10 @@ def test_parse_tunnels_defaults_service_by_type(config_home):
     )
     tunnels, warnings = config.parse_tunnels(config.read_raw()[0])
     assert warnings == []
-    assert tunnels[0].service == SERVICE_MYSQL
-    assert tunnels[0].group == "Databases"
-    assert tunnels[1].service == SERVICE_HTTP
-    assert tunnels[1].group == "Services"
+    # Nothing infers a group any more: without one in the file, both land in the same
+    # place, and the form is where a tunnel is given its heading.
+    assert tunnels[0].group == "Tunnels"
+    assert tunnels[1].group == "Tunnels"
 
 
 def test_parse_tunnels_group_override(config_home):
@@ -293,9 +290,7 @@ def test_write_then_parse_is_stable(config_home):
         command_line="kubectl port-forward svc/dash 8080:80",
         local_port=8080,
         target_label="svc/dash:80",
-        service=SERVICE_HTTP,
         group="Services",
-        env="pro",
     )
     config.write([original], {"Solo": ["dash"]})
     raw, _ = config.read_raw()
@@ -304,5 +299,5 @@ def test_write_then_parse_is_stable(config_home):
     assert warnings == []
     assert bundle_warnings == []
     assert tunnels[0].command_line == original.command_line
-    assert tunnels[0].env == "pro"
+    assert tunnels[0].group == "Services"
     assert bundles == {"Solo": ["dash"]}

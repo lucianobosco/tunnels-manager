@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import socket
+import threading
 import time
 from pathlib import Path
 
@@ -11,8 +12,6 @@ import pytest
 
 from tunnels_manager import model
 from tunnels_manager.model import (
-    SERVICE_HTTP,
-    SERVICE_TCP,
     STATE_STARTING,
     STATE_UP,
     PortOwner,
@@ -120,40 +119,6 @@ def test_command_tunnel_target_uses_the_label_then_the_binary():
     assert command.target == ""
 
 
-def test_service_label_falls_back_to_uppercase(tunnel):
-    assert tunnel.service_label == "MySQL"
-    tunnel.service = "postgres"
-    assert tunnel.service_label == "POSTGRES"
-
-
-@pytest.mark.parametrize(
-    ("env", "project", "expected"),
-    [
-        ("pro", "", "PRO"),
-        ("pre", "", "PRE"),
-        ("dev", "", "DEV"),
-        ("staging", "", "STAGING"),
-        ("", "my-project-pro", "PRO"),
-        ("", "my-project-pre", "PRE"),
-        ("", "pre-things", "PRE"),
-        ("", "pro-things", "PRO"),
-        ("", "neutral", ""),
-    ],
-)
-def test_env_label(tunnel, env, project, expected):
-    tunnel.env = env
-    tunnel.project = project
-    tunnel.instance = ""
-    assert tunnel.env_label == expected
-
-
-def test_is_production(tunnel):
-    tunnel.env = "pro"
-    assert tunnel.is_production is True
-    tunnel.env = "pre"
-    assert tunnel.is_production is False
-
-
 def test_active_states(tunnel):
     assert tunnel.active is False
     tunnel.state = STATE_STARTING
@@ -182,36 +147,15 @@ def test_uptime_is_empty_unless_up(tunnel):
 # -- connection fields ------------------------------------------------------ #
 
 
-def test_connection_fields_for_mysql_with_database(tunnel):
+def test_connection_fields_are_the_port_and_nothing_else(tunnel):
+    """What you do with the port -- which database, which client -- is not our business."""
     fields = {caption: value for caption, value, _ in tunnel.connection_fields()}
-    assert fields["Host"] == "127.0.0.1"
-    assert fields["Port"] == "15001"
-    assert fields["mysql client"] == "mysql -h 127.0.0.1 -P 15001 -u user -p shop"
-    assert fields["JDBC"] == "jdbc:mysql://127.0.0.1:15001/shop"
-    assert fields["Database"] == "shop"
-    assert fields["Target"] == "my-bastion:3306"
-
-
-def test_connection_fields_for_mysql_without_database(tunnel):
-    tunnel.database = ""
-    captions = [caption for caption, _, _ in tunnel.connection_fields()]
-    assert "Database" not in captions
-    fields = {caption: value for caption, value, _ in tunnel.connection_fields()}
-    assert fields["mysql client"] == "mysql -h 127.0.0.1 -P 15001 -u user -p"
-    assert fields["JDBC"] == "jdbc:mysql://127.0.0.1:15001/"
-
-
-def test_connection_fields_for_http(tunnel):
-    tunnel.service = SERVICE_HTTP
-    fields = {caption: value for caption, value, _ in tunnel.connection_fields()}
-    assert fields["URL"] == "http://127.0.0.1:15001"
-    assert "JDBC" not in fields
-
-
-def test_connection_fields_for_plain_tcp(tunnel):
-    tunnel.service = SERVICE_TCP
-    fields = {caption: value for caption, value, _ in tunnel.connection_fields()}
-    assert fields["host:port"] == "127.0.0.1:15001"
+    assert fields == {
+        "Host": "127.0.0.1",
+        "Port": "15001",
+        "host:port": "127.0.0.1:15001",
+        "Target": tunnel.target,
+    }
 
 
 def test_target_field_is_not_copyable(tunnel):
@@ -284,15 +228,16 @@ def test_last_meaningful_line_is_truncated(tunnel):
 
 
 def test_config_dict_for_iap(tunnel):
-    tunnel.env = "pro"
     tunnel.extra_args = ["--flag"]
     data = tunnel.config_dict()
     assert data["instance"] == "my-bastion"
     assert data["extra_args"] == ["--flag"]
-    assert data["database"] == "shop"
-    assert data["env"] == "pro"
     assert data["group"] == "Databases"
     assert "command" not in data
+    # The speed-up is the default, so a file only ever records a refusal.
+    assert "site_packages" not in data
+    tunnel.site_packages = False
+    assert tunnel.config_dict()["site_packages"] is False
 
 
 def test_config_dict_for_command_tunnel():
@@ -303,7 +248,6 @@ def test_config_dict_for_command_tunnel():
         command_line="kubectl port-forward svc/dash 8080:80",
         local_port=8080,
         target_label="svc/dash:80",
-        service=SERVICE_HTTP,
         group="Services",
     )
     data = command.config_dict()
@@ -460,3 +404,80 @@ def test_find_port_owner_when_status_has_no_uid_line(monkeypatch):
     owner = find_port_owner(9)
     assert owner is not None
     assert owner.mine is True
+
+
+# -- measuring the far end -------------------------------------------------- #
+
+
+def greeting_server(payload: bytes | None, hangup: bool = False) -> tuple[int, threading.Thread]:
+    """A server on a free port. With a payload it greets like MySQL does; without one it
+    accepts and says nothing, like an HTTP service waiting to be asked."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def serve() -> None:
+        try:
+            conn, _ = listener.accept()
+            with conn:
+                if payload is not None:
+                    conn.sendall(payload)
+                    if not hangup:
+                        conn.recv(64)
+        except OSError:
+            pass
+        finally:
+            listener.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return port, thread
+
+
+def test_measure_rtt_times_the_first_byte_back():
+    port, thread = greeting_server(b"\x0a5.7.44-log\x00greeting")
+    elapsed = model.measure_rtt("127.0.0.1", port)
+    thread.join(timeout=2)
+    assert elapsed is not None
+    assert 0 <= elapsed < 2000
+
+
+def test_measure_rtt_gives_up_on_a_server_that_says_nothing():
+    """No number is better than an invented one: an HTTP service greets nobody."""
+    port, thread = greeting_server(None)
+    assert model.measure_rtt("127.0.0.1", port, timeout=0.2) is None
+    thread.join(timeout=2)
+
+
+def test_measure_rtt_returns_none_when_nothing_is_listening(free_port):
+    assert model.measure_rtt("127.0.0.1", free_port, timeout=0.2) is None
+
+
+def test_measure_rtt_returns_none_when_the_far_end_hangs_up():
+    port, thread = greeting_server(b"")
+    assert model.measure_rtt("127.0.0.1", port, timeout=0.5) is None
+    thread.join(timeout=2)
+
+
+def test_measure_rtt_when_the_greeting_is_all_there_is():
+    """The probe drains what is left before closing -- a socket closed with unread data
+    resets the connection, and gcloud logs a traceback for every reset. Here the far end
+    hangs up first, so draining ends on end-of-stream instead of on the timeout."""
+    port, thread = greeting_server(b"\x0a5.7.44-log\x00greeting", hangup=True)
+    elapsed = model.measure_rtt("127.0.0.1", port, timeout=0.5)
+    thread.join(timeout=2)
+    assert elapsed is not None
+
+
+def test_config_dict_for_a_command_tunnel_that_refuses_the_speed_up():
+    command = Tunnel(
+        key="dash",
+        label="Dash",
+        type=model.TYPE_COMMAND,
+        command_line="kubectl port-forward svc/dash 8080:80",
+        local_port=8080,
+        site_packages=False,
+    )
+    assert command.config_dict()["site_packages"] is False

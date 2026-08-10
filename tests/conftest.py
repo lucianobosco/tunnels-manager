@@ -32,8 +32,7 @@ SAMPLE_CONFIG = textwrap.dedent(
         project: my-project-pro
         local_host: 127.0.0.1
         local_port: 15001
-        service: mysql
-        database: shop
+        group: Databases
       - key: reports
         label: Reports
         instance: my-bastion
@@ -42,7 +41,7 @@ SAMPLE_CONFIG = textwrap.dedent(
         project: my-project-pre
         local_host: 0.0.0.0
         local_port: 15002
-        service: mysql
+        group: Databases
       - key: dashboard
         label: Dashboard
         type: command
@@ -50,8 +49,7 @@ SAMPLE_CONFIG = textwrap.dedent(
         local_host: 127.0.0.1
         local_port: 15003
         target_label: svc/dash:80 (team)
-        service: http
-        env: pro
+        group: Services
 
     bundles:
       Daily work:
@@ -93,7 +91,6 @@ def tunnel() -> Tunnel:
         zone="europe-west1-d",
         project="my-project-pro",
         local_port=15001,
-        database="shop",
         group="Databases",
     )
 

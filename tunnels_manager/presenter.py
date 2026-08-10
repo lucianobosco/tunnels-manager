@@ -7,14 +7,16 @@ tested without a display.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 
 from .model import (
     DEFAULT_GROUP,
-    SERVICE_GROUPS,
     STATE_ERROR,
     STATE_STARTING,
     STATE_UP,
+    TYPE_COMMAND,
+    TYPE_IAP,
     PortOwner,
     Tunnel,
     slugify,
@@ -38,16 +40,126 @@ def status_subtitle(active: int, total: int) -> str:
     return f"{total} tunnels · none open"
 
 
-def state_tag(tunnel: Tunnel) -> tuple[str, str, str]:
-    """(text, css class, tooltip) for the state pill of a row."""
+#: The four looks a row can have: the stripe, the LED and the state word share them.
+KIND_UP, KIND_BUSY, KIND_ERR, KIND_OFF = "up", "busy", "err", "off"
+
+#: A failure's second line has to fit a narrow column, so the long reason from gcloud is
+#: reduced to the handful of things that actually go wrong. The full text is the tooltip.
+ERROR_HINTS = (
+    ("address already in use", "port in use"),
+    ("already in use", "port in use"),
+    ("credentials", "no credentials"),
+    ("not have permission", "denied"),
+    ("permission", "denied"),
+    ("timed out", "timeout"),
+    ("timeout", "timeout"),
+    ("could not resolve", "unknown host"),
+    ("not found", "not found"),
+)
+
+
+def error_hint(detail: str) -> str:
+    """A failure in two or three words, for the line under the state."""
+    lowered = detail.lower()
+    for needle, hint in ERROR_HINTS:
+        if needle in lowered:
+            return hint
+    return "see the log"
+
+
+def state_card(tunnel: Tunnel) -> tuple[str, str, str, str]:
+    """(kind, state word, second line, tooltip) for a row.
+
+    The second line is never empty: an em dash holds the space so the state word cannot
+    jump the moment a stopped tunnel starts connecting.
+    """
     if tunnel.state == STATE_UP:
-        uptime = tunnel.uptime()
-        return uptime or "0s", "state-up", f"Up for {uptime}"
+        uptime = tunnel.uptime() or "0s"
+        return KIND_UP, "ESTABLISHED", uptime, f"Up for {uptime}"
     if tunnel.state == STATE_STARTING:
-        return "opening", "state-start", "Waiting for the local port to open"
+        return KIND_BUSY, "CONNECTING", "opening", "Waiting for the local port to open"
     if tunnel.state == STATE_ERROR:
-        return "error", "state-error", tunnel.detail or "The tunnel failed"
-    return "stopped", "state-down", ""
+        detail = tunnel.detail or "The tunnel failed"
+        return KIND_ERR, "FAILED", error_hint(detail), detail
+    return KIND_OFF, "STOPPED", "\u2014", ""
+
+
+#: What a Python that cannot find its own dependencies says. If a tunnel dies with one of
+#: these while the speed-up is on, the speed-up is the first thing to suspect.
+IMPORT_TROUBLE = (
+    "ModuleNotFoundError",
+    "No module named",
+    "ImportError",
+    "cannot import name",
+)
+
+
+#: gcloud says this on every run when it cannot import NumPy, and then masks every byte
+#: it carries in pure Python. It is the ceiling on a large transfer.
+NUMPY_NEEDLE = "consider installing NumPy"
+
+#: Portable on purpose: gcloud names the interpreter it actually runs, which is usually
+#: its own bundled Python and not the system one -- a NumPy installed for the system
+#: Python is a different version and it will never be imported.
+NUMPY_INSTALL = (
+    "\"$(gcloud info --format='value(basic.python_location)')\" -m pip install --user numpy"
+)
+
+
+def numpy_hint(tunnel: Tunnel) -> str:
+    """The command that answers the warning gcloud writes into its own log."""
+    if not any(NUMPY_NEEDLE in line for line in tunnel.log):
+        return ""
+    return NUMPY_INSTALL
+
+
+def sitepackages_warning(tunnel: Tunnel) -> str:
+    """Red line for the open row: the speed-up is probably what broke this tunnel."""
+    if tunnel.state != STATE_ERROR or not tunnel.site_packages:
+        return ""
+    if not any(needle in line for line in tunnel.log for needle in IMPORT_TROUBLE):
+        return ""
+    return (
+        "gcloud could not import something. The NumPy speed-up lets it see this "
+        "machine's Python packages, and one of them may be shadowing a dependency of "
+        "the SDK -- turn it off in Edit and try again."
+    )
+
+
+def row_subtitle(tunnel: Tunnel) -> str:
+    """The dim line under a tunnel's name.
+
+    The design gives the row one line of free text and no badges, so everything that
+    used to be a badge lives here: what it is, where it lives, which environment, and
+    the listening address when it is not just localhost.
+    """
+    parts = [tunnel.project or "kubernetes"]
+    if tunnel.exposed:
+        parts.append(tunnel.local_host)
+    return " \u00b7 ".join(parts)
+
+
+def headline_field(tunnel: Tunnel) -> tuple[str, str]:
+    """The string worth a Copy button: where the port is."""
+    return "host:port", f"{tunnel.connect_host}:{tunnel.local_port}"
+
+
+def route_tooltip(tunnel: Tunnel) -> str:
+    """What the IAP / PORT-FWD pill explains: the whole route, in one place.
+
+    The pill itself can only say how the tunnel is opened. Where it ends up is spread
+    across the target column and the subtitle, so hovering it spells the route out.
+    """
+    local = f"{tunnel.local_host}:{tunnel.local_port}"
+    if tunnel.type == TYPE_COMMAND:
+        return f"A command opens {local} and forwards it to {tunnel.target}"
+    where = f"project {tunnel.project}" if tunnel.project else "no project set"
+    if tunnel.zone:
+        where += f" · zone {tunnel.zone}"
+    return (
+        f"A Google Cloud IAP tunnel: {local} on this machine goes through the "
+        f"identity-aware proxy to {tunnel.target} ({where})"
+    )
 
 
 def row_tooltip(tunnel: Tunnel) -> str:
@@ -73,10 +185,6 @@ def exposure_tooltip(tunnel: Tunnel) -> str:
     )
 
 
-def environment_tooltip(tunnel: Tunnel) -> str:
-    return "Production" if tunnel.is_production else f"{tunnel.env_label} environment"
-
-
 def banner_text(conflicts: dict[int, list[Tunnel]]) -> str:
     """The duplicated-port warning. Empty when there is nothing to warn about."""
     if not conflicts:
@@ -87,14 +195,6 @@ def banner_text(conflicts: dict[int, list[Tunnel]]) -> str:
         return f"Local port {port} is used twice: {names}. Every tunnel needs its own."
     ports = ", ".join(str(port) for port in sorted(conflicts))
     return f"{len(conflicts)} local ports are used twice: {ports}."
-
-
-def first_selectable_key(order: list[str], available: set[str]) -> str | None:
-    """Which tunnel to select when nothing is selected yet."""
-    return next((key for key in order if key in available), None)
-
-
-# -- messages --------------------------------------------------------------- #
 
 
 def bundle_message(name: str, started: int) -> str:
@@ -169,15 +269,24 @@ class TunnelForm:
     """The raw contents of the tunnel dialog."""
 
     label: str
-    service: str
-    database: str
-    env: str
+    #: Empty on a new tunnel: it is then made from the name.
+    key: str
     instance: str
     remote_port: str
     zone: str
     project: str
     local_host: str
     local_port: str
+    #: How the tunnel is opened, which is what the row's pill shows: an IAP tunnel built
+    #: from instance/zone/project, or a command that opens the local port itself.
+    type: str = TYPE_IAP
+    command: str = ""
+    target_label: str = ""
+    #: The heading it is listed under. Empty falls back to the default one.
+    group: str = ""
+    #: Extra gcloud flags, as typed. Split the way a shell would split them.
+    extra_args: str = ""
+    site_packages: bool = True
 
 
 def parse_port(text: str) -> int | None:
@@ -206,20 +315,39 @@ def validate_tunnel_form(
     next_free_port=None,
 ) -> tuple[Tunnel | None, str]:
     """Turn the dialog contents into a Tunnel, or explain what is wrong."""
-    remote_port = parse_port(form.remote_port)
+    is_command = form.type == TYPE_COMMAND
+
     local_port = parse_port(form.local_port)
-    if remote_port is None or local_port is None:
-        return None, "Ports must be numbers between 1 and 65535."
+    if local_port is None:
+        return None, "The local port must be a number between 1 and 65535."
 
     label = form.label.strip()
     if not label:
         return None, "Give the tunnel a name."
 
+    # slugify always yields something, so there is no empty-key case to guard.
+    key = slugify(form.key.strip() or label)
+    own_key = editing.key if editing else None
+    if any(other.key == key for other in existing if other.key != own_key):
+        return None, f"The key '{key}' is already taken by another tunnel."
+
+    # A command opens the local port itself, so it needs no instance and no remote port;
+    # an IAP tunnel is built out of them and cannot do without.
+    command = form.command.strip()
     instance = form.instance.strip()
     zone = form.zone.strip()
     project = form.project.strip()
-    if not instance or not zone or not project:
-        return None, "Instance, zone and project are required."
+    remote_port = 0
+    if is_command:
+        if not shlex.split(command):
+            return None, "Give the command that opens the port."
+    else:
+        parsed = parse_port(form.remote_port)
+        if parsed is None:
+            return None, "The remote port must be a number between 1 and 65535."
+        remote_port = parsed
+        if not instance or not zone or not project:
+            return None, "Instance, zone and project are required."
 
     ignore_key = editing.key if editing else None
     clash = next(
@@ -240,9 +368,8 @@ def validate_tunnel_form(
             message += f" The first free one is {free}."
         return None, message
 
-    service = form.service
     tunnel = Tunnel(
-        key=editing.key if editing else slugify(label),
+        key=key,
         label=label,
         instance=instance,
         remote_port=remote_port,
@@ -250,11 +377,13 @@ def validate_tunnel_form(
         project=project,
         local_host=form.local_host.strip() or "127.0.0.1",
         local_port=local_port,
-        group=SERVICE_GROUPS.get(service, DEFAULT_GROUP),
-        extra_args=list(editing.extra_args) if editing else [],
-        service=service,
-        env=form.env,
-        database=form.database.strip(),
+        # One place decides where a tunnel is listed, and it is this form.
+        group=form.group.strip() or DEFAULT_GROUP,
+        extra_args=shlex.split(form.extra_args),
+        type=form.type,
+        command_line=command,
+        target_label=form.target_label.strip(),
+        site_packages=form.site_packages,
     )
     return tunnel, ""
 
