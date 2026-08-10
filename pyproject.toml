@@ -1,6 +1,6 @@
 [project]
 name = "tunnels-manager"
-version = "1.0.0"
+version = "0.1.0"
 description = "A small GTK4 manager for Google Cloud IAP tunnels and port-forwards"
 readme = "README.md"
 requires-python = ">=3.11"
