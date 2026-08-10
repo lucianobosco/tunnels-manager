@@ -40,6 +40,13 @@ RESTART_WAIT_STEPS = 40
 RESTART_WAIT_SLEEP = 0.05
 
 
+#: Lets gcloud see the interpreter's site-packages, so it finds NumPy and stops masking
+#: WebSocket frames in pure Python. See TunnelManager.child_env.
+SITEPACKAGES_ENV = "CLOUDSDK_PYTHON_SITEPACKAGES"
+#: Set this to launch tunnels exactly as gcloud would on its own.
+OPT_OUT_ENV = "TUNNELS_MANAGER_NO_SITEPACKAGES"
+
+
 class TunnelManager:
     """Owns the tunnels and their processes."""
 
@@ -183,6 +190,24 @@ class TunnelManager:
 
     # -- lifecycle ---------------------------------------------------------- #
 
+    @staticmethod
+    def child_env(tunnel: Tunnel, environ: dict | None = None) -> dict:
+        """The environment a tunnel process is launched with.
+
+        gcloud runs its Python with -S, so it cannot see a NumPy that is already
+        installed -- and without NumPy it masks every WebSocket frame in pure Python,
+        which is the throughput ceiling of an IAP tunnel. CLOUDSDK_PYTHON_SITEPACKAGES
+        lifts that. Google ships it off because a system package can shadow one of the
+        SDK's own dependencies, so there is a way out: set TUNNELS_MANAGER_NO_SITEPACKAGES
+        and the tunnels launch exactly as gcloud would on its own. An explicit value for
+        CLOUDSDK_PYTHON_SITEPACKAGES always wins over both.
+        """
+        env = dict(os.environ if environ is None else environ)
+        env["PYTHONUNBUFFERED"] = "1"
+        if tunnel.site_packages and not env.get(OPT_OUT_ENV):
+            env.setdefault(SITEPACKAGES_ENV, "1")
+        return env
+
     def start(self, tunnel: Tunnel) -> None:
         if tunnel.active:
             return
@@ -234,7 +259,7 @@ class TunnelManager:
                 errors="replace",
                 bufsize=1,
                 start_new_session=True,
-                env=dict(os.environ, PYTHONUNBUFFERED="1"),
+                env=self.child_env(tunnel),
             )
         except OSError as exc:
             self._fail(tunnel, f"Could not launch the command: {exc}")

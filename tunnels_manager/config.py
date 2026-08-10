@@ -14,9 +14,6 @@ import yaml
 
 from .model import (
     DEFAULT_GROUP,
-    SERVICE_GROUPS,
-    SERVICE_HTTP,
-    SERVICE_MYSQL,
     TYPE_COMMAND,
     TYPE_IAP,
     Tunnel,
@@ -53,11 +50,8 @@ CONFIG_HEADER = """\
 # type: command runs 'command' as it is (kubectl port-forward, ssh -L, …) and watches
 #   'local_port' to know whether the tunnel is up.
 #
-# service: mysql | http | tcp — sets the row badge, decides which fields the connection
-#   panel offers, and groups the window (mysql -> "Databases", anything else -> "Services").
-# database: optional database name; goes into the JDBC string and the mysql command.
-# env: pro | pre | dev; guessed from the project name when omitted.
-# group: only to force a group other than the one implied by 'service'.
+# group: the heading the tunnel is listed under. Absent, it goes under "Tunnels".
+# site_packages: false keeps gcloud from using NumPy for this tunnel.
 # bundles: shortcuts that open several tunnels at once, by their 'key'.
 #   Manage them in the app: main menu -> Shortcuts -> Manage shortcuts…
 
@@ -76,7 +70,6 @@ tunnels:
     project: my-gcp-project
     local_host: 127.0.0.1
     local_port: 13306
-    service: mysql
 """
 )
 
@@ -124,19 +117,14 @@ def parse_tunnels(raw: dict) -> tuple[list[Tunnel], list[str]]:
             continue
 
         kind = str(entry.get("type") or TYPE_IAP).lower()
-        # Without an explicit service, IAP tunnels are databases and bare commands
-        # (kubectl port-forward and friends) are web services, which is the usual case.
-        service = str(
-            entry.get("service") or (SERVICE_HTTP if kind == TYPE_COMMAND else SERVICE_MYSQL)
-        ).lower()
         # Spelled out rather than **kwargs so the types are checkable.
         key = str(entry.get("key") or f"tunnel-{index}")
         label = str(entry.get("label") or entry.get("key") or f"Tunnel {index}")
         local_host = str(entry.get("local_host", "127.0.0.1"))
-        # The group comes from the service; 'group' in the file overrides it.
-        group = str(entry.get("group") or SERVICE_GROUPS.get(service, DEFAULT_GROUP))
-        env = str(entry.get("env") or "")
-        database = str(entry.get("database") or "")
+        # Whatever heading the file says, or the default one.
+        group = str(entry.get("group") or DEFAULT_GROUP)
+        # Absent means on: the speed-up is the default, and the file only records a no.
+        site_packages = bool(entry.get("site_packages", True))
 
         try:
             if kind == TYPE_COMMAND:
@@ -148,10 +136,8 @@ def parse_tunnels(raw: dict) -> tuple[list[Tunnel], list[str]]:
                     label=label,
                     local_host=local_host,
                     group=group,
-                    service=service,
-                    env=env,
-                    database=database,
                     type=TYPE_COMMAND,
+                    site_packages=site_packages,
                     command_line=command_line,
                     local_port=int(entry["local_port"]),
                     target_label=str(entry.get("target_label") or ""),
@@ -162,9 +148,7 @@ def parse_tunnels(raw: dict) -> tuple[list[Tunnel], list[str]]:
                     label=label,
                     local_host=local_host,
                     group=group,
-                    service=service,
-                    env=env,
-                    database=database,
+                    site_packages=site_packages,
                     instance=str(entry["instance"]),
                     remote_port=int(entry["remote_port"]),
                     zone=str(entry["zone"]),

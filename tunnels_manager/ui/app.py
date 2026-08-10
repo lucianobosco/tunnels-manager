@@ -18,7 +18,6 @@ ACCELERATORS = {
     "app.quit": ["<Primary>q"],
     "win.reload": ["<Primary>r"],
     "win.add": ["<Primary>n"],
-    "win.toggle-panel": ["<Primary>i"],
 }
 
 
@@ -35,6 +34,10 @@ class TunnelsApp(Adw.Application):
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
+        # The row palette is a set of fixed dark values taken from the design. Keeping a
+        # light set that has to agree with it is a second source of truth, so the app
+        # picks dark and says so.
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         display = Gdk.Display.get_default()
         if display is not None:
             provider = Gtk.CssProvider()

@@ -5,6 +5,7 @@ This module deliberately has no GTK imports, so it can be unit-tested on its own
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import os
 import re
@@ -21,19 +22,8 @@ TYPE_IAP = "iap"
 TYPE_COMMAND = "command"
 
 #: What is on the far end. Decides the row badge and the connection panel fields.
-SERVICE_MYSQL = "mysql"
-SERVICE_HTTP = "http"
-SERVICE_TCP = "tcp"
-
-SERVICE_LABELS = {SERVICE_MYSQL: "MySQL", SERVICE_HTTP: "HTTP", SERVICE_TCP: "TCP"}
-SERVICE_GROUPS = {
-    SERVICE_MYSQL: "Databases",
-    SERVICE_HTTP: "Services",
-    SERVICE_TCP: "Services",
-}
 DEFAULT_GROUP = "Tunnels"
 
-ENV_LABELS = {"pro": "PRO", "pre": "PRE", "dev": "DEV"}
 
 STATE_DOWN = "down"
 STATE_STARTING = "starting"
@@ -86,6 +76,56 @@ def port_is_free(host: str, port: int) -> bool:
         # Anything other than "taken" or "not allowed" (bad host, unsupported family) does
         # not mean somebody is listening.
         return exc.errno not in (errno.EADDRINUSE, errno.EACCES)
+
+
+#: How long a probe waits for the far end to say something before giving up.
+PROBE_TIMEOUT = 3.0
+#: How long it then spends emptying the socket, so the close is orderly.
+DRAIN_TIMEOUT = 0.2
+
+
+def measure_rtt(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> float | None:
+    """Milliseconds for the far end of a tunnel to answer, or None when it says nothing.
+
+    A tunnel forwards one TCP stream and offers no channel of its own to interrogate, so
+    the only honest measurement is a byte that comes back. Timing the local connect()
+    would measure nothing: gcloud accepts on this machine and only then opens the stream
+    to the far side. What does traverse the whole path is the greeting a server sends on
+    its own -- MySQL does, which is what makes this work for a database tunnel.
+
+    The cost, stated plainly because it lands on somebody else's server: this opens a TCP
+    connection and closes it without authenticating, which MySQL counts as an aborted
+    client and may write to its error log.
+
+    Servers that greet nobody (an HTTP service waiting for a request) return None rather
+    than a number that would have to be invented.
+    """
+    started = time.perf_counter()
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError:
+        return None
+    try:
+        sock.settimeout(timeout)
+        if not sock.recv(1):
+            return None
+        elapsed = (time.perf_counter() - started) * 1000.0
+        # Closing a socket that still holds unread data makes the kernel send RST instead
+        # of FIN, and the tunnel logs a traceback for every reset. So the rest of the
+        # greeting is read and thrown away, and the close is an orderly one.
+        sock.settimeout(DRAIN_TIMEOUT)
+        try:
+            while sock.recv(4096):
+                pass
+        except OSError:
+            pass
+        with contextlib.suppress(OSError):
+            sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        return None
+    finally:
+        sock.close()
+    return elapsed
 
 
 @dataclass
@@ -162,9 +202,10 @@ class Tunnel:
     type: str = TYPE_IAP
     command_line: str = ""
     target_label: str = ""
-    service: str = SERVICE_MYSQL
-    env: str = ""
-    database: str = ""
+    #: Let gcloud see the interpreter's site-packages, so it finds NumPy and stops
+    #: masking every WebSocket frame in pure Python. On by default; a system package
+    #: shadowing one of the SDK's dependencies is the reason it can be turned off.
+    site_packages: bool = True
 
     # Runtime state, never written to the config file.
     state: str = STATE_DOWN
@@ -198,25 +239,6 @@ class Tunnel:
         return f"{self.instance}:{self.remote_port}"
 
     @property
-    def service_label(self) -> str:
-        return SERVICE_LABELS.get(self.service, self.service.upper())
-
-    @property
-    def env_label(self) -> str:
-        """PRO / PRE. Guessed from the project or instance name when not set."""
-        if self.env:
-            return ENV_LABELS.get(self.env.lower(), self.env.upper())
-        haystack = f"{self.project} {self.instance} {self.command_line}".lower()
-        for needle, key in (("-pre", "pre"), ("pre-", "pre"), ("-pro", "pro"), ("pro-", "pro")):
-            if needle in haystack:
-                return ENV_LABELS[key]
-        return ""
-
-    @property
-    def is_production(self) -> bool:
-        return self.env_label == "PRO"
-
-    @property
     def exposed(self) -> bool:
         """Listening on every interface, not just on loopback."""
         return self.local_host in ("0.0.0.0", "::", "*")
@@ -244,24 +266,15 @@ class Tunnel:
 
     def connection_fields(self) -> list[tuple[str, str, bool]]:
         """(caption, value, copyable) rows for the connection panel."""
+        # Where the port is, and what is on the other end of it. What you do with it --
+        # which database, which user, which client -- is not a tunnel manager's business.
         host, port = self.connect_host, self.local_port
-        fields = [("Host", host, True), ("Port", str(port), True)]
-
-        if self.service == SERVICE_MYSQL:
-            client = f"mysql -h {host} -P {port} -u user -p"
-            if self.database:
-                client += f" {self.database}"
-            fields.append(("mysql client", client, True))
-            fields.append(("JDBC", f"jdbc:mysql://{host}:{port}/{self.database}", True))
-            if self.database:
-                fields.append(("Database", self.database, True))
-        elif self.service == SERVICE_HTTP:
-            fields.append(("URL", f"http://{host}:{port}", True))
-        else:
-            fields.append(("host:port", f"{host}:{port}", True))
-
-        fields.append(("Target", self.target, False))
-        return fields
+        return [
+            ("Host", host, True),
+            ("Port", str(port), True),
+            ("host:port", f"{host}:{port}", True),
+            ("Target", self.target, False),
+        ]
 
     # -- process ------------------------------------------------------------ #
 
@@ -312,6 +325,8 @@ class Tunnel:
             }
             if self.target_label:
                 data["target_label"] = self.target_label
+            if not self.site_packages:
+                data["site_packages"] = False
         else:
             data = {
                 "key": self.key,
@@ -325,11 +340,8 @@ class Tunnel:
             }
             if self.extra_args:
                 data["extra_args"] = list(self.extra_args)
+            if not self.site_packages:
+                data["site_packages"] = False
 
-        data["service"] = self.service
-        if self.database:
-            data["database"] = self.database
-        if self.env:
-            data["env"] = self.env
         data["group"] = self.group
         return data

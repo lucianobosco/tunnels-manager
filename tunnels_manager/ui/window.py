@@ -1,4 +1,4 @@
-"""The main window: the tunnel table plus the connection panel."""
+"""The main window: the tunnel table, each row revealing its own connection details."""
 
 from __future__ import annotations
 
@@ -7,21 +7,20 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gio, GLib, GObject, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from .. import APP_NAME, PROJECT_URL, __version__, presenter
 from ..config import config_file
 from ..manager import TunnelManager
 from ..model import TYPE_IAP, Tunnel, port_is_free
 from .dialogs import BundleDialog, BundlesDialog, LogWindow, TunnelDialog
-from .panel import ConnectionPanel
 from .rows import TunnelRow
 from .util import clear_box, set_clipboard
 
 #: How often the watchdog runs and the labels refresh.
 TICK_MS = 500
-#: Below this width the panel overlays the table instead of shrinking it.
-NARROW_WIDTH = 760
+#: The tallest the list may make the window on its own.
+MAX_CONTENT_HEIGHT = 760
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -33,13 +32,12 @@ class MainWindow(Adw.ApplicationWindow):
         self.log_windows: dict[str, LogWindow] = {}
         self.conflicts: dict[int, list[Tunnel]] = {}
         self.lists: list[Gtk.ListBox] = []
-        self.selected_key: str | None = None
         self.groups: list[Gtk.Widget] = []
 
-        # Wide enough that long names are not cut with the panel open, tall enough for
-        # a handful of tunnels with compact rows.
-        self.set_default_size(1100, 540)
-        self.set_size_request(420, 320)
+        # Wide enough for the whole row without the target being cut. The height is not
+        # stated: it comes from how many tunnels are configured (see the scroller below).
+        self.set_default_size(1000, -1)
+        self.set_size_request(900, 320)
 
         self.title_widget = Adw.WindowTitle(title=APP_NAME, subtitle="")
         header = Adw.HeaderBar(title_widget=self.title_widget)
@@ -61,13 +59,6 @@ class MainWindow(Adw.ApplicationWindow):
         add_button.connect("clicked", self.on_add_clicked)
         header.pack_end(add_button)
 
-        self.panel_toggle = Gtk.ToggleButton(
-            icon_name="dialog-information-symbolic",
-            tooltip_text="Connection details (Ctrl+I)",
-            active=True,
-        )
-        header.pack_end(self.panel_toggle)
-
         self.groups_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.groups_box.set_margin_top(12)
         self.groups_box.set_margin_bottom(16)
@@ -79,22 +70,14 @@ class MainWindow(Adw.ApplicationWindow):
             vexpand=True,
             hscrollbar_policy=Gtk.PolicyType.NEVER,
         )
+        # The window opens at the height of however many tunnels are configured: the
+        # scroller reports its content's natural height, the window asks for -1, and GTK
+        # does the arithmetic. Capped, so a long file cannot open a window taller than the
+        # screen -- past the cap it scrolls, as it always did.
+        scroller.set_propagate_natural_height(True)
+        scroller.set_max_content_height(self.content_cap())
 
-        self.panel = ConnectionPanel(self)
-        self.split = Adw.OverlaySplitView(
-            content=scroller,
-            sidebar=self.panel,
-            sidebar_position=Gtk.PackType.END,
-            max_sidebar_width=320,
-        )
-        self.panel_toggle.bind_property(
-            "active",
-            self.split,
-            "show-sidebar",
-            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE,
-        )
-
-        self.toasts = Adw.ToastOverlay(child=self.split)
+        self.toasts = Adw.ToastOverlay(child=scroller)
 
         # A duplicated port cannot be waved through: the second tunnel to start would
         # fail, or worse, you would connect to the wrong database.
@@ -106,12 +89,6 @@ class MainWindow(Adw.ApplicationWindow):
         toolbar.add_top_bar(self.banner)
         self.set_content(toolbar)
 
-        breakpoint_ = Adw.Breakpoint.new(
-            Adw.BreakpointCondition.parse(f"max-width: {NARROW_WIDTH}px")
-        )
-        breakpoint_.add_setter(self.split, "collapsed", True)
-        self.add_breakpoint(breakpoint_)
-
         self.install_actions()
         self.rebuild()
 
@@ -120,6 +97,18 @@ class MainWindow(Adw.ApplicationWindow):
         manager.on_port_busy = lambda tunnel: GLib.idle_add(self.toast_port_busy, tunnel)
         self.tick_id = GLib.timeout_add(TICK_MS, self.tick)
         self.connect("close-request", self.on_close_request)
+
+    @staticmethod
+    def content_cap() -> int:
+        """How tall the list may make the window: never more than fits the screen."""
+        display = Gdk.Display.get_default()
+        if display is None:
+            return MAX_CONTENT_HEIGHT
+        monitors = display.get_monitors()
+        if not monitors.get_n_items():
+            return MAX_CONTENT_HEIGHT
+        monitor = monitors.get_item(0)
+        return min(MAX_CONTENT_HEIGHT, int(monitor.get_geometry().height * 0.78))
 
     # -- actions ------------------------------------------------------------ #
 
@@ -132,7 +121,6 @@ class MainWindow(Adw.ApplicationWindow):
             "open-config": self.act_open_config,
             "about": self.act_about,
             "bundles": self.act_bundles,
-            "toggle-panel": self.act_toggle_panel,
         }
         for name, callback in simple.items():
             action = Gio.SimpleAction.new(name, None)
@@ -186,9 +174,6 @@ class MainWindow(Adw.ApplicationWindow):
 
     def act_bundles(self, *_args) -> None:
         BundlesDialog(self).present(self)
-
-    def act_toggle_panel(self, *_args) -> None:
-        self.panel_toggle.set_active(not self.panel_toggle.get_active())
 
     def act_about(self, *_args) -> None:
         about = Adw.AboutWindow(
@@ -336,6 +321,18 @@ class MainWindow(Adw.ApplicationWindow):
             self.manager.order.append(key)
         else:
             tunnel.state = original.state
+            # The key is editable, and it is what the shortcuts point at: when it changes,
+            # the old entry goes, its place in the order is kept, and every shortcut that
+            # named it is rewritten. Otherwise the rename would silently orphan them.
+            if tunnel.key != original.key:
+                self.manager.tunnels.pop(original.key, None)
+                self.manager.order = [
+                    tunnel.key if key == original.key else key for key in self.manager.order
+                ]
+                for keys in self.manager.bundles.values():
+                    for index, key in enumerate(keys):
+                        if key == original.key:
+                            keys[index] = tunnel.key
             self.manager.tunnels[tunnel.key] = tunnel
         self.manager.save_config()
         self.rebuild()
@@ -374,9 +371,10 @@ class MainWindow(Adw.ApplicationWindow):
                 title.set_margin_bottom(4)
                 self.groups_box.append(title)
 
-                listbox = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
-                listbox.add_css_class("boxed-list")
-                listbox.connect("row-selected", self.on_row_selected)
+                listbox = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+                # No .boxed-list: each row draws its own card, so the list must not draw
+                # a frame around them.
+                listbox.add_css_class("tunnel-list")
                 for tunnel in items:
                     row = TunnelRow(self, tunnel)
                     self.rows[tunnel.key] = row
@@ -385,45 +383,7 @@ class MainWindow(Adw.ApplicationWindow):
                 self.lists.append(listbox)
 
         self.menu_button.set_menu_model(self.build_menu())
-        self.restore_selection()
         self.sync()
-
-    def on_row_selected(self, listbox: Gtk.ListBox, row: TunnelRow | None) -> None:
-        if self.syncing or row is None:
-            return
-        # Groups are separate list boxes, so the others must let go of their selection.
-        self.syncing = True
-        try:
-            for other in self.lists:
-                if other is not listbox:
-                    other.unselect_all()
-        finally:
-            self.syncing = False
-        self.selected_key = row.tunnel.key
-        self.panel.show_tunnel(row.tunnel)
-
-    def restore_selection(self) -> None:
-        """Keep the same tunnel selected across a rebuild.
-
-        With nothing selected, pick the first row: GTK focuses it anyway, and the panel
-        then starts with something useful instead of an empty state.
-        """
-        row = self.rows.get(self.selected_key) if self.selected_key else None
-        if row is None:
-            first = presenter.first_selectable_key(self.manager.order, set(self.rows))
-            row = self.rows.get(first) if first else None
-            self.selected_key = first
-        self.syncing = True
-        try:
-            if row is not None:
-                parent = row.get_parent()
-                if isinstance(parent, Gtk.ListBox):
-                    parent.select_row(row)
-        finally:
-            self.syncing = False
-        self.panel.show_tunnel(row.tunnel if row is not None else None)
-        if row is None:
-            self.selected_key = None
 
     def build_menu(self) -> Gio.Menu:
         menu = Gio.Menu()

@@ -123,11 +123,11 @@ def test_reload_drops_a_stopped_tunnel_that_left_the_file(manager, written_confi
 
 
 def test_save_config_round_trip(manager):
-    manager.tunnels["shop"].database = "changed"
+    manager.tunnels["shop"].group = "Changed"
     manager.save_config()
     fresh = TunnelManager()
     fresh.load_config()
-    assert fresh.tunnels["shop"].database == "changed"
+    assert fresh.tunnels["shop"].group == "Changed"
     assert fresh.bundles == {"Daily work": ["shop", "reports"]}
 
 
@@ -708,3 +708,34 @@ def test_poll_waits_while_a_tunnel_is_still_opening(manager, free_port):
     manager.poll()
     assert tunnel.state == STATE_STARTING
     assert changes == []
+
+
+# -- the environment tunnels are launched with ------------------------------- #
+
+
+def test_child_env_lets_gcloud_see_its_packages(tunnel):
+    """Without this, gcloud runs its Python with -S, cannot import NumPy, and masks every
+    byte of the tunnel in pure Python."""
+    env = TunnelManager.child_env(tunnel, {})
+    assert env["CLOUDSDK_PYTHON_SITEPACKAGES"] == "1"
+    assert env["PYTHONUNBUFFERED"] == "1"
+
+
+def test_child_env_respects_the_switch_on_the_tunnel(tunnel):
+    tunnel.site_packages = False
+    assert "CLOUDSDK_PYTHON_SITEPACKAGES" not in TunnelManager.child_env(tunnel, {})
+
+
+def test_child_env_respects_the_global_opt_out(tunnel):
+    env = TunnelManager.child_env(tunnel, {"TUNNELS_MANAGER_NO_SITEPACKAGES": "1"})
+    assert "CLOUDSDK_PYTHON_SITEPACKAGES" not in env
+
+
+def test_child_env_never_overrides_a_value_that_is_already_there(tunnel):
+    env = TunnelManager.child_env(tunnel, {"CLOUDSDK_PYTHON_SITEPACKAGES": "0"})
+    assert env["CLOUDSDK_PYTHON_SITEPACKAGES"] == "0"
+
+
+def test_child_env_inherits_the_real_environment_by_default(tunnel, monkeypatch):
+    monkeypatch.setenv("SOMETHING_OF_MINE", "yes")
+    assert TunnelManager.child_env(tunnel)["SOMETHING_OF_MINE"] == "yes"

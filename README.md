@@ -2,18 +2,18 @@
 
 # Tunnels Manager
 
-**Open your database tunnels with one click, and copy the connection string with another.**
+**One switch per tunnel, and the path it takes when you open it.**
 
-A small GTK4 app for the tunnels you open every day: Google Cloud IAP tunnels,
-`kubectl port-forward`, `ssh -L`. One window, one switch per tunnel, and the connection
-details ready to paste into your SQL client.
+A small GTK4 app for the tunnels you live on: Google Cloud IAP tunnels,
+`kubectl port-forward`, `ssh -L`. One window, one row each, and a click on a row draws
+what is between you and the far end.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![GTK 4](https://img.shields.io/badge/GTK-4-blue)
 ![Coverage 100%](https://img.shields.io/badge/coverage-100%25-brightgreen)
 
-<img src="docs/screenshot.png" alt="The tunnel list with the connection panel open" width="820">
+<img src="docs/screenshot.png" alt="The tunnel list, with one row open showing the path from this machine through the identity-aware proxy to a bastion" width="860">
 
 </div>
 
@@ -23,13 +23,16 @@ Opening a tunnel is one command. Remembering which of your fifteen local ports b
 which database, noticing that one of them silently died, and not leaving orphan `gcloud`
 processes behind is the actual work. Tunnels Manager does that part:
 
-- **One switch per tunnel.** The state sits right next to the switch, so you see the change
-  where you are looking.
+- **One switch per tunnel**, with its state right next to it, in a table whose columns are
+  fixed: nothing on the row moves as it connects.
+- **Open a row and you see the path** -- this machine, the identity-aware proxy, the far end
+  -- with the hop that is being negotiated lit up, and the one that broke marked in red.
 - **The port is a button.** Click it and it is on your clipboard.
-- **Connection details on the side.** Host, port, a ready `mysql` command and a JDBC string,
-  each with its own copy button. Web services get their URL instead.
-- **It tells you when something breaks.** A tunnel that dies turns red with the reason, not
-  silently keeps a dead port.
+- **A round trip you can trust.** While a tunnel is up the app times how long the far end
+  takes to answer *through the tunnel*, and says so under a small graph. There is nothing
+  invented on screen: no answer means a dash, not a number.
+- **It tells you when something breaks.** A tunnel that dies goes red with the reason, and
+  the row explains it instead of quietly keeping a dead port.
 - **No orphan processes.** Closing a tunnel kills its whole process group; closing the
   window closes every tunnel.
 - **Local ports stay unique**, and when one is taken the app offers to free it.
@@ -78,37 +81,56 @@ which is an example with made-up names. Replace those tunnels with yours.
 
 ```
 Databases
-  Shop (production)      MySQL PRO   3307  ⋮  12m      ●  │  Shop (production)
-  Reports (production)   MySQL PRO   3308  ⋮  error    ○  │  HOST    127.0.0.1        ⧉
-  Shop (staging)   MySQL PRE 0.0.0.0 3309  ⋮  stopped  ○  │  PORT    3307             ⧉
-Services                                                  │  MYSQL   mysql -h …       ⧉
-  Internal dashboard     HTTP  PRO   8080  ⋮  1m       ●  │  JDBC    jdbc:mysql://…   ⧉
+  ● Shop (production)     IAP        :3307   my-bastion:3306    ESTABLISHED  ⋮ ▉▁ ▸
+    my-project-pro                                             12m
+  ● Reports (production)  IAP        :3308   my-bastion:3307    FAILED       ⋮ ▁▉ ▸
+    my-project-pro                                             port in use
+Services
+  ● Internal dashboard    PORT-FWD   :8080   svc/dashboard:80   ESTABLISHED  ⋮ ▉▁ ▾
+    kubernetes                                                 1m
+    ┌ localhost ────┐ gcloud iap ···· ┌ 🔒 proxy ─┐ ···· ┌ my-bastion ─────┐
+    │ 127.0.0.1 :8080│               │ 41 ms     │      │ project · zone  │
+    └───────────────┘                └──────────┘       └─────────────────┘
+    127.0.0.1:8080                                    [ Copy ]   ╱╲╱ rtt 41 ms
 ```
 
 | Action | How |
 | --- | --- |
 | Open or close a tunnel | The switch on its row |
+| See the path, and the string to paste | Click the row; click again to close it |
 | Copy the local port | Click the port number |
-| See host, port and connection strings | Select the row; the panel is on the right |
 | Open every tunnel / close every tunnel | ▶ and ■ in the header |
 | Per-tunnel actions | The ⋮ menu: view log, restart, free the port, copy, edit, delete |
 | Shortcuts, new tunnel, reload | The ☰ menu |
 
-Keyboard: `Ctrl+N` new tunnel · `Ctrl+R` reload the configuration ·
-`Ctrl+I` show or hide the panel · `Ctrl+Q` quit.
+Keyboard: `Ctrl+N` new tunnel · `Ctrl+R` reload the configuration · `Ctrl+Q` quit.
 
-### What each row tells you
+### What a row tells you
 
 | Element | Meaning |
 | --- | --- |
-| `MySQL` / `HTTP` | What is on the far end, which also decides the panel fields |
-| `PRO` (red) / `PRE` | The environment. Colour is reserved for risk, so production stands out |
-| `0.0.0.0` (amber) | The tunnel listens on every interface: anyone on your network can use it |
-| `stopped` | No process |
-| `opening` | The command started; the local port is not open yet |
-| `12m` (green) | Open, and for how long |
-| `error` (red) | It failed or died; the reason is in the tooltip and in the log |
-| ⚠ | Another tunnel claims the same local port |
+| The stripe and the dot | The state, in colour, down the left edge of the card |
+| `IAP` / `PORT-FWD` | How the tunnel is opened. Hover it for the whole route |
+| `0.0.0.0` in the subtitle | It listens on every interface: anyone on your network can use it |
+| `STOPPED` | No process |
+| `CONNECTING` | The command started; the local port is not open yet |
+| `ESTABLISHED` + `12m` | Open, and for how long |
+| `FAILED` + a reason | It failed or died; the full text is in the tooltip and in the log |
+
+The second line under the state always exists — an em dash when there is nothing to say —
+so the state never jumps as a tunnel connects. Every column is fixed for the same reason.
+
+### What an open row tells you
+
+The three boxes are this machine, the identity-aware proxy, and the far end. A pulse of
+light walks the path while a hop is being negotiated, the box at the far end takes the
+colour of the state, and the hop that broke goes red.
+
+Under them, the address to paste with a **Copy** button, and on the right the round trip
+measured *through the tunnel*: the app opens a connection and times the first byte the far
+end sends back, every 15 seconds while the tunnel is up. A server that greets nobody gets
+a dash rather than an invented number. Each measurement is a real connection, which a
+database counts as an aborted client — the price of not making the figure up.
 
 Column widths are fixed, so a state change never shifts the table sideways.
 
@@ -128,10 +150,9 @@ tunnels:
     project: my-project-pro
     local_host: 127.0.0.1         # 0.0.0.0 to expose it to your network
     local_port: 3307
-    service: mysql                # mysql | http | tcp
-    database: shop                # optional: goes into the JDBC and mysql strings
-    env: pro                      # optional: guessed from the project name
+    group: Databases              # optional: the heading it is listed under
     extra_args: []                # optional extra gcloud flags
+    site_packages: false          # optional: see "Making the tunnels faster" below
 ```
 
 An IAP tunnel is exactly this command, nothing more:
@@ -141,9 +162,34 @@ gcloud compute start-iap-tunnel my-bastion 3306 \
   --zone=europe-west1-d --project=my-project-pro --local-host-port=127.0.0.1:3307
 ```
 
-`service` does three things: sets the row badge, decides which fields the connection panel
-offers, and groups the window (`mysql` → **Databases**, anything else → **Services**). Add
-`group: <name>` to force a different group.
+### Making the tunnels faster than plain gcloud
+
+An IAP tunnel is a WebSocket, and the protocol masks every byte that crosses it. `gcloud`
+does that in pure Python unless it can import NumPy, and on a large transfer that masking
+is the ceiling — which is why `gcloud` itself suggests installing NumPy on every run.
+
+Two things have to be true for it to find one, and the second is the one that catches
+people out:
+
+1. **NumPy has to be installed for the interpreter `gcloud` actually uses**, which is
+   usually its own bundled Python, not the system one. A NumPy installed for the system
+   Python is invisible to it — different version, different ABI. Ask `gcloud` which
+   interpreter it runs and install there:
+
+   ```bash
+   "$(gcloud info --format='value(basic.python_location)')" -m pip install --user numpy
+   ```
+
+2. **`gcloud` has to be allowed to look.** It launches that interpreter with `-S`, which
+   skips `site` entirely — so neither the user directory the command above writes to nor
+   anything else on the path is searched. Setting `CLOUDSDK_PYTHON_SITEPACKAGES=1` drops
+   the `-S`, and Tunnels Manager sets it for every tunnel it starts.
+
+Google ships that setting off because a package outside the SDK can shadow one of its own
+dependencies. So it is a switch per tunnel — **Throughput → Let gcloud use NumPy**, on by
+default — and when a tunnel dies with an import error, the open row says in red that the
+speed-up is the first thing to suspect. `site_packages: false` in the file is the same
+switch, and `TUNNELS_MANAGER_NO_SITEPACKAGES=1` turns it off for every tunnel at once.
 
 ### Tunnels that are not IAP
 
@@ -158,10 +204,10 @@ whether it is up:
     local_host: 127.0.0.1
     local_port: 8080
     target_label: svc/my-dashboard:80    # display only
-    service: http
 ```
 
-These are edited in the file: the dialog only knows about IAP tunnels.
+Both kinds are editable from the app: **⋮ → Edit…** asks how the tunnel opens and swaps the
+fields to match. Every field has a **?** next to it with an example.
 
 ### Shortcuts
 
@@ -227,13 +273,13 @@ a display:
 
 | Module | Responsibility |
 | --- | --- |
-| `model.py` | What a tunnel is, and what holds a local port |
+| `model.py` | What a tunnel is, what holds a local port, and how the far end is timed |
 | `config.py` | Reading and writing `tunnels.yaml` |
 | `manager.py` | Starting, watching and killing processes |
 | `presenter.py` | Every string, validation and decision the window needs |
-| `ui/` | GTK widgets only: they create the widgets and forward events |
+| `ui/` | GTK widgets only: they build the window and forward events. `ui/topology.py` draws the path with Cairo |
 
-That is why `make test` runs 200+ tests in about three seconds and reports **100% coverage**
+That is why `make test` runs 230+ tests in about four seconds and reports **100% coverage**
 of those four modules, with no windows opening. `ui/` is deliberately thin glue and is not
 part of the coverage target.
 
