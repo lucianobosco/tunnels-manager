@@ -9,7 +9,7 @@ gi.require_version("Adw", "1")
 
 from gi.repository import Adw, Gdk, Gio, Gtk
 
-from .. import APP_ID
+from .. import app_id
 from ..manager import TunnelManager
 from .css import CSS
 from .window import MainWindow
@@ -25,8 +25,11 @@ ACCELERATORS = {
 class TunnelsApp(Adw.Application):
     """One instance per session: opening the app again focuses the existing window."""
 
-    def __init__(self, application_id: str = APP_ID):
-        super().__init__(application_id=application_id, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+    def __init__(self, application_id: str | None = None):
+        super().__init__(
+            application_id=application_id or app_id(),
+            flags=Gio.ApplicationFlags.DEFAULT_FLAGS,
+        )
         self.manager = TunnelManager()
         self.window: MainWindow | None = None
 

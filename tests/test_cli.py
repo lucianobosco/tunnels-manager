@@ -104,3 +104,34 @@ def test_signal_handler_stops_the_tunnels(monkeypatch):
     )
     assert cli.main([]) == 0
     assert state == {"stopped": True, "quit": True}
+
+
+# -- the application id ----------------------------------------------------- #
+
+
+def test_app_id_defaults_to_the_project_id(monkeypatch):
+    import tunnels_manager
+
+    monkeypatch.delenv(tunnels_manager.APP_ID_ENV, raising=False)
+    assert tunnels_manager.app_id() == tunnels_manager.DEFAULT_APP_ID
+
+
+def test_app_id_can_be_overridden(monkeypatch):
+    """A fork installs under its own id without touching the source."""
+    import tunnels_manager
+
+    monkeypatch.setenv(tunnels_manager.APP_ID_ENV, "com.example.MyTunnels")
+    assert tunnels_manager.app_id() == "com.example.MyTunnels"
+
+
+def test_the_installer_default_matches_the_package(tmp_path):
+    """install.sh reads the default id from the package: they cannot drift apart."""
+    import re
+    from pathlib import Path
+
+    import tunnels_manager
+
+    script = Path(__file__).resolve().parent.parent / "install.sh"
+    pattern = re.search(r"sed -n 's/\^DEFAULT_APP_ID = \"(.*)\"\$/", script.read_text())
+    assert pattern is not None, "install.sh no longer reads DEFAULT_APP_ID from the package"
+    assert tunnels_manager.DEFAULT_APP_ID.count(".") >= 2  # reverse-DNS, as the desktop wants

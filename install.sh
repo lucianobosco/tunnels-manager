@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # Install Tunnels Manager for the current user. No sudo, nothing outside $HOME.
+#
+# The desktop application id defaults to the one this project publishes. A fork can pick
+# its own without editing any source file:
+#
+#   APP_ID=com.example.MyTunnels ./install.sh
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_ID="io.github.lucianobosco.TunnelsManager"
+
+# Keep this default in step with DEFAULT_APP_ID in tunnels_manager/__init__.py.
+DEFAULT_APP_ID="$(sed -n 's/^DEFAULT_APP_ID = "\(.*\)"$/\1/p' "$SRC/tunnels_manager/__init__.py")"
+APP_ID="${APP_ID:-$DEFAULT_APP_ID}"
 
 BIN_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tunnels-manager"
+LAUNCHER="$BIN_DIR/tunnels-manager"
 
 echo "==> Checking dependencies"
 missing=()
@@ -30,13 +39,21 @@ command -v gcloud >/dev/null || echo "    Note: gcloud is not in PATH, so IAP tu
 echo "==> Installing the launcher in $BIN_DIR"
 mkdir -p "$BIN_DIR"
 chmod +x "$SRC/tunnels-manager"
-ln -sf "$SRC/tunnels-manager" "$BIN_DIR/tunnels-manager"
+ln -sf "$SRC/tunnels-manager" "$LAUNCHER"
 
-echo "==> Installing the icon and the desktop entry"
+echo "==> Installing the icon and the desktop entry as $APP_ID"
 mkdir -p "$ICON_DIR" "$DESKTOP_DIR"
-cp "$SRC/$APP_ID.svg" "$ICON_DIR/$APP_ID.svg"
-sed "s|^Exec=tunnels-manager$|Exec=$BIN_DIR/tunnels-manager|" "$SRC/$APP_ID.desktop" \
-  > "$DESKTOP_DIR/$APP_ID.desktop"
+cp "$SRC/data/icon.svg" "$ICON_DIR/$APP_ID.svg"
+
+# A non-default id has to reach the application too, so its D-Bus name, its icon and its
+# window all agree with the file names installed above.
+if [ "$APP_ID" = "$DEFAULT_APP_ID" ]; then
+  EXEC="$LAUNCHER"
+else
+  EXEC="env TUNNELS_MANAGER_APP_ID=$APP_ID $LAUNCHER"
+fi
+sed -e "s|@EXEC@|$EXEC|" -e "s|@APP_ID@|$APP_ID|g" \
+  "$SRC/data/tunnels-manager.desktop.in" > "$DESKTOP_DIR/$APP_ID.desktop"
 
 command -v update-desktop-database >/dev/null && update-desktop-database "$DESKTOP_DIR" || true
 command -v gtk-update-icon-cache >/dev/null \

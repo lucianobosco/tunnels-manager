@@ -61,6 +61,14 @@ No sudo, and nothing outside your `$HOME`: a launcher in `~/.local/bin`, a deskt
 and an icon in `~/.local/share`, and your configuration in
 `~/.config/tunnels-manager/tunnels.yaml`. To uninstall, delete those four things.
 
+The desktop entry and the icon are named after the application id, which the desktop needs
+to be globally unique — it is what keeps a single instance alive and matches the window to
+its launcher. If you fork this, install under your own id without editing any source file:
+
+```bash
+APP_ID=com.example.MyTunnels ./install.sh
+```
+
 Then search for **Tunnels Manager** in your launcher, or run `tunnels-manager`.
 
 On first run the configuration is created from [`tunnels.dist.yaml`](tunnels.dist.yaml),
