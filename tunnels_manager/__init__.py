@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-__version__ = "1.0.0"
+__version__ = "0.1.0"
 
 APP_NAME = "Tunnels Manager"
 PROJECT_URL = "https://github.com/lucianobosco/tunnels-manager"
