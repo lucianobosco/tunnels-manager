@@ -44,15 +44,35 @@ FAKE_TUNNEL = textwrap.dedent(
 ).strip()
 
 
-def fake_tunnel(port: int) -> Tunnel:
-    """A tunnel whose command is our fake gcloud."""
-    return Tunnel(
-        key="fake",
-        label="Fake tunnel",
-        type="command",
-        command_line=f"{sys.executable} -c {shell_quote(FAKE_TUNNEL)} {port}",
-        local_port=port,
-    )
+@pytest.fixture
+def fake_tunnel():
+    """Hands out tunnels whose command is our fake gcloud, and kills what is left.
+
+    A test that ends with one still running leaves a process holding a port on the
+    developer's machine until the next reboot -- which is the very thing this app exists
+    to keep track of. Restarting replaces tunnel.proc, so only the live process is here
+    to kill; the one it replaced was stopped by the restart itself.
+    """
+    made: list[Tunnel] = []
+
+    def make(port: int) -> Tunnel:
+        tunnel = Tunnel(
+            key="fake",
+            label="Fake tunnel",
+            type="command",
+            command_line=f"{sys.executable} -c {shell_quote(FAKE_TUNNEL)} {port}",
+            local_port=port,
+        )
+        made.append(tunnel)
+        return tunnel
+
+    yield make
+
+    for tunnel in made:
+        proc = tunnel.proc
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 def shell_quote(text: str) -> str:
@@ -330,7 +350,7 @@ def test_start_names_the_sibling_tunnel_holding_the_port(manager, free_port, lis
     assert "'Reports'" in tunnel.detail
 
 
-def test_start_reports_a_launch_failure(manager, monkeypatch, free_port):
+def test_start_reports_a_launch_failure(manager, monkeypatch, free_port, fake_tunnel):
     tunnel = fake_tunnel(free_port)
     manager.tunnels[tunnel.key] = tunnel
     manager.order.append(tunnel.key)
@@ -351,7 +371,7 @@ def test_start_does_nothing_when_already_active(manager):
     assert tunnel.proc is None
 
 
-def test_full_lifecycle_with_a_fake_tunnel(manager, free_port):
+def test_full_lifecycle_with_a_fake_tunnel(manager, free_port, fake_tunnel):
     tunnel = fake_tunnel(free_port)
     manager.tunnels[tunnel.key] = tunnel
     manager.order.append(tunnel.key)
@@ -386,7 +406,7 @@ def test_stop_is_safe_on_a_stopped_tunnel(manager):
     assert tunnel.state == STATE_DOWN
 
 
-def test_stop_falls_back_to_terminate(manager, monkeypatch, free_port):
+def test_stop_falls_back_to_terminate(manager, monkeypatch, free_port, fake_tunnel):
     tunnel = fake_tunnel(free_port)
     manager.start(tunnel)
     assert wait_for(lambda: tunnel.state == STATE_UP)
@@ -422,7 +442,7 @@ def test_reap_escalates_to_sigkill(free_port):
     assert proc.poll() is not None
 
 
-def test_toggle_starts_and_stops(manager, free_port):
+def test_toggle_starts_and_stops(manager, free_port, fake_tunnel):
     tunnel = fake_tunnel(free_port)
     manager.toggle(tunnel)
     assert wait_for(lambda: tunnel.state == STATE_UP)
@@ -430,7 +450,7 @@ def test_toggle_starts_and_stops(manager, free_port):
     assert tunnel.state == STATE_DOWN
 
 
-def test_restart_reopens_the_tunnel(manager, free_port):
+def test_restart_reopens_the_tunnel(manager, free_port, fake_tunnel):
     tunnel = fake_tunnel(free_port)
     manager.start(tunnel)
     assert wait_for(lambda: tunnel.state == STATE_UP)
@@ -537,7 +557,7 @@ def test_poll_detects_a_process_that_died_while_starting(manager, free_port):
     assert any("did not start" in event for event in events)
 
 
-def test_poll_times_out(manager, free_port):
+def test_poll_times_out(manager, free_port, fake_tunnel):
     tunnel = fake_tunnel(free_port + 1)  # opens another port, never this one
     tunnel.local_port = free_port
     manager.tunnels[tunnel.key] = tunnel
@@ -580,7 +600,7 @@ def test_default_callbacks_are_harmless():
 
 
 @pytest.mark.parametrize("quiet", [True, False])
-def test_stop_change_notification(manager, quiet, free_port):
+def test_stop_change_notification(manager, quiet, free_port, fake_tunnel):
     tunnel = fake_tunnel(free_port)
     manager.start(tunnel)
     assert wait_for(lambda: tunnel.state == STATE_UP)
