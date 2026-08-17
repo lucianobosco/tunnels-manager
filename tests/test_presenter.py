@@ -531,3 +531,12 @@ def test_sitepackages_warning_stays_quiet_for_other_failures():
     tunnel.state = STATE_ERROR
     tunnel.log.append("ERROR: (gcloud.compute.start-iap-tunnel) Permission denied")
     assert presenter.sitepackages_warning(tunnel) == ""
+
+
+@pytest.mark.parametrize(
+    ("milliseconds", "expected"),
+    [(0.0, "<1 ms"), (0.42, "<1 ms"), (1.0, "1 ms"), (40.6, "41 ms"), (1200.0, "1200 ms")],
+)
+def test_format_rtt(milliseconds, expected):
+    """Under a millisecond is the normal case on loopback, and "0 ms" reads like a bug."""
+    assert presenter.format_rtt(milliseconds) == expected
