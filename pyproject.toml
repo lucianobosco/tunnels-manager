@@ -10,6 +10,7 @@ keywords = ["gcloud", "iap", "tunnel", "gtk", "gnome", "mysql", "kubernetes"]
 classifiers = [
   "Environment :: X11 Applications :: GTK",
   "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Topic :: System :: Networking",

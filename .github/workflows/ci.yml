@@ -36,6 +36,22 @@ jobs:
       - name: Tests with 100% coverage of the logic
         run: python3 -m pytest --cov --cov-report=term-missing
 
+  # The process code reads ports through `lsof` and `ps` here and through `ss` on Linux:
+  # each branch is only exercised for real on its own system.
+  check-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install GTK and its bindings
+        run: brew install gtk4 libadwaita pygobject3
+
+      - name: Install the development tools
+        run: make venv
+
+      - name: Tests with 100% coverage of the logic
+        run: make test
+
   leaks:
     runs-on: ubuntu-latest
     steps:

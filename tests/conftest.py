@@ -6,6 +6,7 @@ own tunnels.yaml is never read or written.
 
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import sys
@@ -75,7 +76,24 @@ def written_config(config_home):
 
 
 @pytest.fixture
-def manager(written_config):
+def fake_gcloud(tmp_path, monkeypatch) -> Path:
+    """A `gcloud` on PATH that does nothing, so the suite does not depend on the real one.
+
+    The manager refuses to start a tunnel whose binary is missing before it looks at the
+    port, so without this every IAP test would pass only where the Cloud SDK happens to
+    be installed, as it is on GitHub's runners and not on most laptops.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gcloud = bin_dir / "gcloud"
+    gcloud.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    gcloud.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return gcloud
+
+
+@pytest.fixture
+def manager(written_config, fake_gcloud):
     instance = TunnelManager()
     instance.load_config()
     return instance

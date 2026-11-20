@@ -2,6 +2,14 @@
 VENV ?= .venv
 PY   := $(VENV)/bin/python
 
+# The venv borrows PyGObject from the interpreter's site-packages, so it has to be built
+# from the interpreter that has it. On macOS that is Homebrew's, not /usr/bin/python3.
+ifeq ($(shell uname -s),Darwin)
+PYTHON ?= $(shell brew --prefix 2>/dev/null)/bin/python3
+else
+PYTHON ?= python3
+endif
+
 .PHONY: help venv lint types test test-gui coverage check leaks install clean
 
 help:
@@ -15,7 +23,7 @@ help:
 	@echo "make install   install for the current user"
 
 venv:
-	python3 -m venv --system-site-packages $(VENV)
+	$(PYTHON) -m venv --system-site-packages $(VENV)
 	$(PY) -m pip install --quiet --upgrade pip
 	$(PY) -m pip install --quiet -e ".[dev]"
 

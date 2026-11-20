@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import errno
+import os
 import socket
+import subprocess
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
@@ -297,7 +298,8 @@ def test_port_owner_short_cmd_truncates():
     assert short.short_cmd == "ssh -L 1:2:3"
 
 
-def test_find_port_owner_reads_ss_and_proc(free_port, listener):
+def test_find_port_owner_names_a_real_listener(free_port, listener):
+    """Against the real tools of whichever system runs the suite: ss or lsof, then ps."""
     proc = listener(free_port)
     owner = find_port_owner(free_port)
     assert owner is not None
@@ -310,99 +312,74 @@ def test_find_port_owner_returns_none_when_free(free_port):
     assert find_port_owner(free_port) is None
 
 
-def test_find_port_owner_survives_a_missing_ss(monkeypatch):
-    def boom(*_args, **_kwargs):
-        raise OSError("no ss here")
-
-    monkeypatch.setattr(model.subprocess, "run", boom)
-    assert find_port_owner(1234) is None
+SS_OUTPUT = 'LISTEN 0 5 127.0.0.1:9 0.0.0.0:* users:(("ghost",pid=4242,fd=7))'
+LSOF_OUTPUT = "p4242\ncghost\nf3\n"
 
 
-def test_find_port_owner_falls_back_when_proc_is_gone(monkeypatch):
-    class Result:
-        stdout = 'LISTEN 0 5 127.0.0.1:9 0.0.0.0:* users:(("ghost",pid=999999,fd=7))'
+def fake_tools(monkeypatch, outputs: dict[str, str | None]) -> list[list[str]]:
+    """Answer each command by its program name; None means the program is not there."""
+    calls: list[list[str]] = []
 
-    monkeypatch.setattr(model.subprocess, "run", lambda *_a, **_k: Result())
-    owner = find_port_owner(9)
-    assert owner is not None
-    assert owner.pid == 999999
-    assert owner.cmdline == "ghost"
-    assert owner.mine is True
+    def run(argv, **_kwargs):
+        calls.append(argv)
+        out = outputs.get(argv[0])
+        if out is None:
+            raise OSError(f"no {argv[0]} here")
+        return subprocess.CompletedProcess(argv, 0, stdout=out)
+
+    monkeypatch.setattr(model.subprocess, "run", run)
+    return calls
 
 
-def test_find_port_owner_detects_another_user(monkeypatch, tmp_path):
-    class Result:
-        stdout = 'LISTEN 0 5 127.0.0.1:9 0.0.0.0:* users:(("root-thing",pid=4242,fd=7))'
+@pytest.mark.parametrize(
+    ("platform", "tool", "output"),
+    [("linux", "ss", SS_OUTPUT), ("darwin", "lsof", LSOF_OUTPUT)],
+)
+def test_find_port_owner_asks_the_tool_of_each_platform(monkeypatch, platform, tool, output):
+    calls = fake_tools(monkeypatch, {tool: output, "ps": f"  {os.getuid()} /bin/ghost --flag\n"})
+    owner = find_port_owner(9, platform=platform)
+    assert owner == PortOwner(4242, "ghost", "/bin/ghost --flag", mine=True)
+    assert [argv[0] for argv in calls] == [tool, "ps"]
 
-    monkeypatch.setattr(model.subprocess, "run", lambda *_a, **_k: Result())
 
-    real_read_bytes = Path.read_bytes
-    real_read_text = Path.read_text
+@pytest.mark.parametrize(
+    ("platform", "output"),
+    [
+        ("linux", None),
+        ("linux", "LISTEN 0 5 127.0.0.1:9 0.0.0.0:*"),
+        ("darwin", None),
+        ("darwin", ""),
+    ],
+)
+def test_find_port_owner_finds_nobody(monkeypatch, platform, output):
+    """A missing tool, or one that names no process (another user's, without root)."""
+    fake_tools(monkeypatch, {"ss": output, "lsof": output})
+    assert find_port_owner(9, platform=platform) is None
 
-    def fake_read_bytes(self, *args, **kwargs):
-        if str(self) == "/proc/4242/cmdline":
-            return b"/usr/sbin/some-daemon\0--flag\0"
-        return real_read_bytes(self, *args, **kwargs)
 
-    def fake_read_text(self, *args, **kwargs):
-        if str(self) == "/proc/4242/status":
-            return "Name:\tsome-daemon\nUid:\t0\t0\t0\t0\n"
-        return real_read_text(self, *args, **kwargs)
+def test_find_port_owner_survives_a_timeout(monkeypatch):
+    def run(argv, **_kwargs):
+        raise subprocess.TimeoutExpired(argv, 4)
 
-    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
-    monkeypatch.setattr(Path, "read_text", fake_read_text)
+    monkeypatch.setattr(model.subprocess, "run", run)
+    assert find_port_owner(9, platform="linux") is None
 
-    owner = find_port_owner(9)
+
+def test_find_port_owner_detects_another_user(monkeypatch):
+    fake_tools(monkeypatch, {"lsof": LSOF_OUTPUT, "ps": f"{os.getuid() + 1} /usr/sbin/daemon\n"})
+    owner = find_port_owner(9, platform="darwin")
     assert owner is not None
     assert owner.mine is False
-    assert owner.cmdline == "/usr/sbin/some-daemon --flag"
+    assert owner.cmdline == "/usr/sbin/daemon"
 
 
-def test_find_port_owner_handles_unreadable_status(monkeypatch):
-    class Result:
-        stdout = 'LISTEN 0 5 127.0.0.1:9 0.0.0.0:* users:(("thing",pid=4243,fd=7))'
-
-    monkeypatch.setattr(model.subprocess, "run", lambda *_a, **_k: Result())
-
-    real_read_text = Path.read_text
-
-    def fake_read_text(self, *args, **kwargs):
-        if str(self) == "/proc/4243/status":
-            return "Uid:\tnot-a-number\n"
-        return real_read_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", fake_read_text)
-    owner = find_port_owner(9)
+@pytest.mark.parametrize("ps_output", [None, "", "not-a-uid\n"])
+def test_find_port_owner_falls_back_when_ps_cannot_describe_it(monkeypatch, ps_output):
+    """The process can exit between the two questions: keep its name and assume it is ours."""
+    fake_tools(monkeypatch, {"ss": SS_OUTPUT, "ps": ps_output})
+    owner = find_port_owner(9, platform="linux")
     assert owner is not None
-    assert owner.mine is True
-
-
-def test_find_port_owner_ignores_output_without_a_pid(monkeypatch):
-    class Result:
-        stdout = "LISTEN 0 5 127.0.0.1:9 0.0.0.0:*"
-
-    monkeypatch.setattr(model.subprocess, "run", lambda *_a, **_k: Result())
-    assert find_port_owner(9) is None
-
-
-def test_find_port_owner_when_status_has_no_uid_line(monkeypatch):
-    """A /proc status without a Uid line leaves ownership at its optimistic default."""
-
-    class Result:
-        stdout = 'LISTEN 0 5 127.0.0.1:9 0.0.0.0:* users:(("thing",pid=4244,fd=7))'
-
-    monkeypatch.setattr(model.subprocess, "run", lambda *_a, **_k: Result())
-
-    real_read_text = Path.read_text
-
-    def fake_read_text(self, *args, **kwargs):
-        if str(self) == "/proc/4244/status":
-            return "Name:\tthing\nState:\tS (sleeping)\n"
-        return real_read_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", fake_read_text)
-    owner = find_port_owner(9)
-    assert owner is not None
+    assert owner.cmdline == "ghost"
     assert owner.mine is True
 
 

@@ -6,7 +6,10 @@ import os
 import sys
 
 
-def has_display(environ: dict | None = None) -> bool:
+def has_display(environ: dict | None = None, platform: str = sys.platform) -> bool:
+    # On macOS GTK draws through Quartz, which needs neither X11 nor Wayland.
+    if platform == "darwin":
+        return True
     env = os.environ if environ is None else environ
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 

@@ -39,7 +39,8 @@ processes behind is the actual work. Tunnels Manager does that part:
 
 ## Install
 
-Requirements: Linux with GTK 4.12+, Python 3.11+, and `gcloud` if you use IAP tunnels.
+Requirements: Linux or macOS with GTK 4.12+, Python 3.11+, and `gcloud` if you use IAP
+tunnels.
 
 ```bash
 git clone https://github.com/lucianobosco/tunnels-manager.git
@@ -73,6 +74,28 @@ APP_ID=com.example.MyTunnels ./install.sh
 ```
 
 Then search for **Tunnels Manager** in your launcher, or run `tunnels-manager`.
+
+### On macOS
+
+GTK comes from [Homebrew](https://brew.sh), and the same `./install.sh` handles the rest:
+
+```bash
+brew install gtk4 libadwaita pygobject3
+./install.sh
+```
+
+GTK draws with the native macOS backend, so you do not need XQuartz. Homebrew has no
+PyYAML for its Python, so the installer makes a small venv in
+`~/.local/share/tunnels-manager/venv`. That venv uses Homebrew's PyGObject and gets PyYAML
+from pip. You also get a launcher in `~/.local/bin` and
+`~/Applications/Tunnels Manager.app`, which you can open from Spotlight or keep in the
+Dock. The configuration path is the same as on Linux. To uninstall, delete those three
+things and the configuration.
+
+An app opened from Finder does not get your terminal's `PATH`, so it would not find
+`gcloud` or `kubectl`. The `.app` starts the tunnels through your login shell to work
+around that. While the app is running, the Dock shows the Python icon, because the process
+that owns the window is Homebrew's Python.
 
 On first run the configuration is created from [`tunnels.dist.yaml`](tunnels.dist.yaml),
 which is an example with made-up names. Replace those tunnels with yours.
