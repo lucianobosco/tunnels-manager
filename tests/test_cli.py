@@ -2,24 +2,33 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tunnels_manager import cli
 
 
-def test_has_display_reads_the_environment():
-    assert cli.has_display({"DISPLAY": ":0"}) is True
-    assert cli.has_display({"WAYLAND_DISPLAY": "wayland-0"}) is True
-    assert cli.has_display({}) is False
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [({"DISPLAY": ":0"}, True), ({"WAYLAND_DISPLAY": "wayland-0"}, True), ({}, False)],
+)
+def test_has_display_reads_the_environment(environ, expected):
+    assert cli.has_display(environ, platform="linux") is expected
+
+
+def test_has_display_is_always_true_on_macos():
+    assert cli.has_display({}, platform="darwin") is True
 
 
 def test_has_display_uses_os_environ_by_default(monkeypatch):
     monkeypatch.setenv("DISPLAY", ":42")
-    assert cli.has_display() is True
+    assert cli.has_display(platform="linux") is True
     monkeypatch.delenv("DISPLAY")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-    assert cli.has_display() is False
+    assert cli.has_display(platform="linux") is False
 
 
 def test_main_refuses_to_run_without_a_display(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "has_display", lambda: False)
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     assert cli.main([]) == 1

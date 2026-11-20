@@ -12,10 +12,10 @@ import re
 import shlex
 import socket
 import subprocess
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
 
 #: How a tunnel is started.
 TYPE_IAP = "iap"
@@ -148,39 +148,48 @@ class PortOwner:
         return self.cmdline if len(self.cmdline) <= 160 else self.cmdline[:157] + "…"
 
 
-def find_port_owner(port: int) -> PortOwner | None:
-    """Ask `ss` who is listening on a local port."""
+def _run(argv: list[str]) -> str | None:
+    """Stdout of a short command, or None when it cannot run at all."""
     try:
-        result = subprocess.run(
-            ["ss", "-H", "-ltnp", f"sport = :{port}"],
-            capture_output=True,
-            text=True,
-            timeout=4,
-        )
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=4)
     except (OSError, subprocess.SubprocessError):
         return None
+    return result.stdout
 
-    match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', result.stdout)
-    if not match:
+
+def _listener_from_ss(port: int) -> tuple[int, str] | None:
+    """Linux: `ss` names the listening process. Only our own, without root."""
+    out = _run(["ss", "-H", "-ltnp", f"sport = :{port}"])
+    match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', out or "")
+    return (int(match.group(2)), match.group(1)) if match else None
+
+
+def _listener_from_lsof(port: int) -> tuple[int, str] | None:
+    """macOS has no `ss`; `lsof` answers the same question, also only for our own."""
+    out = _run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpc"])
+    match = re.search(r"^p(\d+)\nc(.*)$", out or "", re.MULTILINE)
+    return (int(match.group(1)), match.group(2)) if match else None
+
+
+def find_port_owner(port: int, platform: str = sys.platform) -> PortOwner | None:
+    """Who is listening on a local port, by asking the tool this system has for it."""
+    lookup = _listener_from_lsof if platform == "darwin" else _listener_from_ss
+    found = lookup(port)
+    if found is None:
         return None
-    name, pid = match.group(1), int(match.group(2))
+    pid, name = found
 
+    # `ps` is the one way to read a process's owner and arguments that Linux and macOS
+    # share: macOS has no /proc.
+    described = _run(["ps", "-o", "uid=", "-o", "command=", "-p", str(pid)]) or ""
+    uid, _, cmdline = described.strip().partition(" ")
     try:
-        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
-        cmdline = raw.replace(b"\0", b" ").decode("utf-8", "replace").strip() or name
-    except OSError:
-        cmdline = name
-
-    mine = True
-    try:
-        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-            if line.startswith("Uid:"):
-                mine = int(line.split()[1]) == os.getuid()
-                break
-    except (OSError, ValueError, IndexError):
-        pass
-
-    return PortOwner(pid=pid, name=name, cmdline=cmdline, mine=mine)
+        mine = int(uid) == os.getuid()
+    except ValueError:
+        # The process is gone, or ps said something unexpected: assume it is ours, which
+        # only means the window offers to close it and the kill then reports what happened.
+        mine = True
+    return PortOwner(pid=pid, name=name, cmdline=cmdline.strip() or name, mine=mine)
 
 
 @dataclass
